@@ -33,7 +33,11 @@ cmake --build --preset default --target Sub0Math_Bench_baseline   # record this 
 
 Budget targets run the benchmark `SUB0MATH_BENCH_REPEATS` times (default 5) and compare each benchmark's
 best run: background load only slows runs down, so best-of-N is steady on a busy desktop where single runs
-varied by 30%. Baselines live in `perf/baselines/<host>.json` (best median ns per op). Timings from one machine
+varied by 30%. Each benchmark is then judged relative to the suite's median change, because a busy or
+throttled machine slows everything alike (seen: every benchmark, hand-written kernels included, +8-23% at
+once). The host drift and raw changes are reported; `bench_check.py --absolute` judges without the
+correction, for CI or quiet machines, since a change that slows every benchmark equally would otherwise
+hide. Baselines live in `perf/baselines/<host>.json` (best median ns per op). Timings from one machine
 say nothing about another, so each host has its own file; a host without one passes and is told how to
 adopt the gate. Regenerate a baseline deliberately and say why in the commit. CI reports drift against
 `github-ubuntu` without blocking, because shared runners are noisy.
