@@ -4,7 +4,9 @@
   bench_check.py check    --results run.json --baseline perf/baselines/<host>.json [--tolerance 0.10]
   bench_check.py baseline --results run.json --baseline perf/baselines/<host>.json
 
-Each benchmark's median time per op is compared. A benchmark slower than baseline by more than the
+Each benchmark's median time per op is compared. With several --results files (repeated runs), each
+benchmark's best (lowest) median is used: background load only ever slows a run down, so best-of-N is
+far steadier on a shared desktop than any single run. A benchmark slower than baseline by more than the
 tolerance fails the check; faster is reported, never failed. Baselines are per host: timings from
 one machine say nothing about another. A missing baseline is reported and passes, so a new host can
 adopt the gate by running `baseline` once and committing the file.
@@ -20,14 +22,14 @@ import sys
 from pathlib import Path
 
 
-def load_results(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+def load_results(paths):
     out = {}
-    for result in data["results"]:
-        out[result["name"]] = {
-            "median_ns": result["median(elapsed)"] / result["batch"] * 1e9,
-            "error": result.get("medianAbsolutePercentError(elapsed)", 0.0),
-        }
+    for path in paths:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        for result in data["results"]:
+            ns = result["median(elapsed)"] / result["batch"] * 1e9
+            if result["name"] not in out or ns < out[result["name"]]["median_ns"]:
+                out[result["name"]] = {"median_ns": ns}
     return out
 
 
@@ -82,7 +84,7 @@ def check(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["check", "baseline"])
-    parser.add_argument("--results", required=True)
+    parser.add_argument("--results", required=True, nargs="+", help="one or more nanobench JSON files")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--tolerance", type=float, default=0.10)
     args = parser.parse_args()

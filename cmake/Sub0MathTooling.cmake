@@ -5,8 +5,8 @@
 #   sub0math_add_benchmark(<target> <sources>...)
 #       Builds a nanobench executable using tools/perf/bench_runner.hpp, plus these targets:
 #         <target>_json             run it and write build/perf/<target>.json
-#         <target>_check            compare with perf/baselines/<host>.json (fails on regression)
-#         <target>_baseline         record perf/baselines/<host>.json from this host
+#         <target>_check            best of SUB0MATH_BENCH_REPEATS runs vs perf/baselines/<host>.json
+#         <target>_baseline         record perf/baselines/<host>.json (best of the same runs)
 #         <target>_vtune_hotspots   VTune hotspots      (SUB0MATH_PROFILE_FILTER, _SECONDS)
 #         <target>_vtune_uarch      VTune microarchitecture exploration
 #         <target>_advisor_roofline Intel Advisor vectorization survey and roofline
@@ -24,6 +24,7 @@ option(SUB0MATH_VECTORIZATION_REPORT "Emit compiler vectorization remarks" OFF)
 option(SUB0MATH_NATIVE_ARCH "Tune for the build machine's CPU (local experiments only)" OFF)
 set(SUB0MATH_PROFILE_FILTER "" CACHE STRING "Benchmark name substring the profiling targets run")
 set(SUB0MATH_PROFILE_SECONDS "10" CACHE STRING "Soak seconds per benchmark under a profiler")
+set(SUB0MATH_BENCH_REPEATS "5" CACHE STRING "Benchmark runs per budget check; each benchmark's best run is compared")
 
 # Where the scripts are, for shells and CI: `python "$(cat build/sub0math_tooling_dir.txt)/profile.py" ...`.
 # CPM may place Sub0Math anywhere, so consumers should not hard-code the path.
@@ -68,6 +69,12 @@ function(sub0math_add_benchmark target)
         return()
     endif()
     set(results "${CMAKE_BINARY_DIR}/perf/${target}.json")
+    set(repeat_commands "")
+    set(repeat_results "")
+    foreach(run RANGE 1 ${SUB0MATH_BENCH_REPEATS})
+        list(APPEND repeat_commands COMMAND $<TARGET_FILE:${target}> --json "${CMAKE_BINARY_DIR}/perf/${target}.run${run}.json")
+        list(APPEND repeat_results "${CMAKE_BINARY_DIR}/perf/${target}.run${run}.json")
+    endforeach()
     set(baseline "${PROJECT_SOURCE_DIR}/perf/baselines/${SUB0MATH_PERF_HOST}.json")
     set(check "${tooling}/bench_check.py")
     set(profile "${tooling}/profile.py")
@@ -76,12 +83,17 @@ function(sub0math_add_benchmark target)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/perf"
         COMMAND $<TARGET_FILE:${target}> --json "${results}"
         DEPENDS ${target} USES_TERMINAL VERBATIM)
+    # Budgets use best-of-N repeated runs (SUB0MATH_BENCH_REPEATS): steady on a busy desktop.
+    add_custom_target(${target}_runs
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/perf"
+        ${repeat_commands}
+        DEPENDS ${target} USES_TERMINAL VERBATIM)
     add_custom_target(${target}_check
-        COMMAND ${Python3_EXECUTABLE} "${check}" check --results "${results}" --baseline "${baseline}"
-        DEPENDS ${target}_json USES_TERMINAL VERBATIM)
+        COMMAND ${Python3_EXECUTABLE} "${check}" check --results ${repeat_results} --baseline "${baseline}"
+        DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
     add_custom_target(${target}_baseline
-        COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results "${results}" --baseline "${baseline}"
-        DEPENDS ${target}_json USES_TERMINAL VERBATIM)
+        COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results ${repeat_results} --baseline "${baseline}"
+        DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
 
     foreach(analysis vtune-hotspots vtune-uarch advisor-roofline perf-record)
         string(REPLACE "-" "_" suffix "${analysis}")

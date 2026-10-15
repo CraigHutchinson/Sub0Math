@@ -31,7 +31,9 @@ cmake --build --preset default --target Sub0Math_Bench_check      # fails if >10
 cmake --build --preset default --target Sub0Math_Bench_baseline   # record this host's baseline
 ```
 
-Baselines live in `perf/baselines/<host>.json` (median ns per op from nanobench). Timings from one machine
+Budget targets run the benchmark `SUB0MATH_BENCH_REPEATS` times (default 5) and compare each benchmark's
+best run: background load only slows runs down, so best-of-N is steady on a busy desktop where single runs
+varied by 30%. Baselines live in `perf/baselines/<host>.json` (best median ns per op). Timings from one machine
 say nothing about another, so each host has its own file; a host without one passes and is told how to
 adopt the gate. Regenerate a baseline deliberately and say why in the commit. CI reports drift against
 `github-ubuntu` without blocking, because shared runners are noisy.

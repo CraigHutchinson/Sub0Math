@@ -4,18 +4,18 @@
   "system": "Windows 11",
   "note": "Median ns per op from nanobench. Regenerate deliberately; say why in the commit.",
   "benchmarks": {
-    "Mat4 * Vec4, double": 1192.192,
-    "Mat4 * Vec4, float": 826.586,
-    "dot, double": 640.701,
-    "dot, f32::Length": 617.493,
-    "dot, f64::Length": 633.718,
-    "dot, float": 613.231,
-    "quaternion rotate, double": 1718.201,
-    "quaternion rotate, float": 984.487,
-    "segment distance^2, Point2<f64::Length>": 1791.217,
-    "segment distance^2, hand-written scalars": 1796.55,
-    "x += v*dt, double": 267.592,
-    "x += v*dt, f64::Length": 268.495,
-    "x += v*dt, float": 130.148
+    "Mat4 * Vec4, double": 1048.213,
+    "Mat4 * Vec4, float": 699.832,
+    "dot, double": 558.641,
+    "dot, f32::Length": 609.986,
+    "dot, f64::Length": 556.581,
+    "dot, float": 568.611,
+    "quaternion rotate, double": 1702.564,
+    "quaternion rotate, float": 899.385,
+    "segment distance^2, closestPoint(Segment<f64::Length>)": 1548.059,
+    "segment distance^2, hand-written scalars": 1589.442,
+    "x += v*dt, double": 283.738,
+    "x += v*dt, f64::Length": 264.25,
+    "x += v*dt, float": 128.816
   }
 }
