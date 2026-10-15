@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: build-linux (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: gcc, cc: gcc-14, cxx: g++-14 }
+          - { compiler: clang, cc: clang-19, cxx: clang++-19 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14 clang-19 ninja-build
+      - name: Configure
+        run: cmake --preset ci-unix -G Ninja
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+      - name: Build
+        run: cmake --build --preset ci-unix
+      - name: Test
+        run: ctest --preset ci-unix
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ci-msvc
+      - name: Build
+        run: cmake --build --preset ci-msvc
+      - name: Test
+        run: ctest --preset ci-msvc
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ci-unix
+      - name: Build
+        run: cmake --build --preset ci-unix
+      - name: Test
+        run: ctest --preset ci-unix
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14
+      - name: Configure (ASan + UBSan)
+        run: cmake --preset ci-asan
+        env:
+          CC: gcc-14
+          CXX: g++-14
+      - name: Build
+        run: cmake --build --preset ci-asan
+      - name: Test
+        run: ctest --preset ci-asan
+
+  performance:
+    name: performance (informational)
+    runs-on: ubuntu-latest
+    # Shared runners are noisy: timing drift is reported in the job summary, never blocking.
+    # Deterministic gates (size static_asserts, must-not-compile checks) run in every test job instead.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
+      - name: Configure (profile preset)
+        run: cmake --preset profile -G Ninja -DSUB0MATH_PERF_HOST=github-ubuntu
+        env:
+          CC: gcc-14
+          CXX: g++-14
+      - name: Build
+        run: cmake --build --preset profile
+      - name: Test the profiling build
+        run: ctest --preset profile
+      - name: Benchmark against the CI baseline
+        run: |
+          cmake --build --preset profile --target Sub0Math_Bench_json
+          python3 tools/perf/bench_check.py check --tolerance 0.25 \
+            --results build-profile/perf/Sub0Math_Bench.json --baseline perf/baselines/github-ubuntu.json
+      - name: Vectorization remarks
+        run: |
+          cmake --preset vectorization -G Ninja
+          python3 tools/perf/vectorization_report.py --build-dir build-vec --target Sub0Math_Bench \
+            --output build-vec/vectorization.md
+          head -n 3 build-vec/vectorization.md >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CC: gcc-14
+          CXX: g++-14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: performance
+          path: |
+            build-profile/perf/*.json
+            build-vec/vectorization.md

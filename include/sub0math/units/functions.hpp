@@ -1,0 +1,138 @@
+#pragma once
+
+#include <cmath>
+
+#include "sub0math/number/real.hpp"
+#include "sub0math/units/dimension.hpp"
+#include "sub0math/units/quantity.hpp"
+
+namespace sub0math
+{
+
+/**
+ * Computes the absolute value.
+ *
+ * @param q A quantity.
+ * @return |q|, same dimension.
+ */
+template<typename D, Real Rep>
+[[nodiscard]] constexpr Quantity<D, Rep> abs(const Quantity<D, Rep>& q) noexcept
+{
+    return q < Quantity<D, Rep>{} ? -q : q;
+}
+
+/**
+ * Computes a square root; only dimensions with even exponents have one.
+ *
+ * @param q A quantity, e.g. an area or a squared velocity.
+ * @return The root, e.g. a length or a speed.
+ */
+template<typename D, Real Rep>
+    requires HasSquareRoot<D>
+[[nodiscard]] Quantity<DimensionSqrt<D>, Rep> sqrt(const Quantity<D, Rep>& q) noexcept
+{
+    return Quantity<DimensionSqrt<D>, Rep>::fromSi(std::sqrt(q.si()));
+}
+
+/**
+ * Computes the sine of an angle; only angles are accepted, so degrees cannot be passed by mistake.
+ *
+ * @param angle An angle.
+ * @return Its sine.
+ */
+template<Real Rep>
+[[nodiscard]] Rep sin(const Quantity<dim::Angle, Rep>& angle) noexcept
+{
+    return std::sin(angle.si());
+}
+
+/**
+ * Computes the cosine of an angle.
+ *
+ * @param angle An angle.
+ * @return Its cosine.
+ */
+template<Real Rep>
+[[nodiscard]] Rep cos(const Quantity<dim::Angle, Rep>& angle) noexcept
+{
+    return std::cos(angle.si());
+}
+
+/**
+ * Computes the tangent of an angle.
+ *
+ * @param angle An angle.
+ * @return Its tangent.
+ */
+template<Real Rep>
+[[nodiscard]] Rep tan(const Quantity<dim::Angle, Rep>& angle) noexcept
+{
+    return std::tan(angle.si());
+}
+
+/**
+ * Computes the angle of a direction from two components of the same dimension.
+ *
+ * @param y Second component.
+ * @param x First component.
+ * @return The angle in (-pi, pi].
+ */
+template<typename D, Real Rep>
+[[nodiscard]] Quantity<dim::Angle, Rep> atan2(const Quantity<D, Rep>& y, const Quantity<D, Rep>& x) noexcept
+{
+    return Quantity<dim::Angle, Rep>::fromSi(std::atan2(y.si(), x.si()));
+}
+
+/**
+ * Makes the angle whose sine is a ratio. Not named `asin`: the C library's `asin(double)` would win
+ * overload resolution for plain arguments and silently return a number.
+ *
+ * @param ratio A number in [-1, 1].
+ * @return The angle.
+ */
+template<Real Rep>
+[[nodiscard]] Quantity<dim::Angle, Rep> angleFromSine(Rep ratio) noexcept
+{
+    return Quantity<dim::Angle, Rep>::fromSi(std::asin(ratio));
+}
+
+/**
+ * Makes the angle whose cosine is a ratio.
+ *
+ * @param ratio A number in [-1, 1].
+ * @return The angle.
+ */
+template<Real Rep>
+[[nodiscard]] Quantity<dim::Angle, Rep> angleFromCosine(Rep ratio) noexcept
+{
+    return Quantity<dim::Angle, Rep>::fromSi(std::acos(ratio));
+}
+
+/**
+ * Treats the radian as 1, removing the angle from a dimension.
+ *
+ * Use it where physics does exactly that, and nowhere else: arc length (`dropAngle(angle * radius)`),
+ * tangential speed, rotational kinetic energy.
+ *
+ * @param q A quantity with an angle exponent.
+ * @return The same value without it.
+ */
+template<typename D, Real Rep>
+[[nodiscard]] constexpr Quantity<DimensionWithoutAngle<D>, Rep> dropAngle(const Quantity<D, Rep>& q) noexcept
+{
+    return Quantity<DimensionWithoutAngle<D>, Rep>::fromSi(q.si());
+}
+
+/**
+ * Reports whether a quantity is finite.
+ *
+ * @param q A quantity.
+ * @return False for infinities and NaN.
+ */
+template<typename D, Real Rep>
+[[nodiscard]] bool isFinite(const Quantity<D, Rep>& q) noexcept
+{
+    return std::isfinite(q.si());
+}
+
+} // namespace sub0math

@@ -1,0 +1,47 @@
+---
+description: C++ authoring and review standards. Auto-attaches when C++ files are in Agent context. Points the agent to cpp-write (before authoring) and cpp-review (after changes).
+globs: "**/*.cpp,**/*.h,**/*.hpp,**/*.inl,**/*.cc"
+alwaysApply: false
+---
+
+# C++ Standards
+
+Style profile: `sub0` (declared in STYLE_GUIDE.md). It wins over generic examples: `.hpp`, camelCase
+functions, `camelCase_` members.
+
+## Skill invocation
+
+| Trigger | Skill |
+|---|---|
+| Before writing a new class, public API, or module | **cpp-write** (`~/.claude/skills/cpp-write/SKILL.md`) |
+| After substantive C++ changes | **cpp-review** (`~/.claude/skills/cpp-review/SKILL.md`) |
+| Before implementing -- to review a plan or design doc | **cpp-review** (plan review mode) |
+| After L0/L1 MUST findings | **cpp-simplify** (`~/.claude/skills/cpp-simplify/SKILL.md`) |
+
+Full reference material: `~/.claude/skills/cpp/references/`
+
+---
+
+## MUST constraints (produce review findings if violated)
+
+**Types** -- prefer project-established types over `std::*` equivalents. Check the reinvention catalogue (`~/.claude/skills/cpp/references/cpp-idioms.md > Reinvention catalogue`) for project-specific type preferences before using standard-library alternatives.
+
+**Memory** -- follow the project's allocation conventions. Prefer `std::unique_ptr` / `std::make_unique` for owned heap objects; avoid raw `new`/`delete` outside RAII wrappers.
+
+**Global state:**
+- Never use file-statics, function-local statics, or namespace-scope mutable variables for cached or process-lifetime state -- they are testability-hostile (latched once per process, no reset hook)
+- Prefer an instantiable provider class with a scoped-active binding (see `~/.claude/skills/cpp/references/cpp-modernisation.md > Globals, singletons, and testability seam`)
+
+**Reinvention check** -- before writing any utility, grep the project's utility directories for an existing equivalent. Duplicating a project utility is a MUST finding in review.
+
+---
+
+## SHOULD constraints
+
+- `[[nodiscard]]` on predicates, `Try*` functions, observers, and `Compute*` / `Resolve*`
+- `noexcept` on pure observers and default/move constructors
+- Named predicates over enum comparison at call sites
+- No boolean behaviour selectors -- two named functions or `enum class` parameter
+- `#pragma once` in all new headers; file name is the snake_case of its primary type (sub0 S06)
+- Raw pointer members require an ownership annotation: `// owning`, `// non-owning`
+- Comments explain WHY; no phase/roadmap narrative (`// [TICKET-NNN]` references for tracked deferrals)

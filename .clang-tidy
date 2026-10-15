@@ -1,0 +1,14 @@
+---
+# Base C++ modernisation configuration.
+# Project-specific suppressions belong below this comment.
+Checks: >
+  modernize-*,
+  readability-*,
+  bugprone-*,
+  performance-*,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-named-parameter
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+FormatStyle: file

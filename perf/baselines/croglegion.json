@@ -1,0 +1,19 @@
+{
+  "host": "CrogLegion",
+  "machine": "AMD64",
+  "system": "Windows 11",
+  "note": "Median ns per op from nanobench. Regenerate deliberately; say why in the commit.",
+  "benchmarks": {
+    "Mat4 * Vec4, double": 1393.501,
+    "Mat4 * Vec4, float": 903.451,
+    "dot, double": 604.493,
+    "dot, f32::Length": 646.109,
+    "dot, f64::Length": 696.987,
+    "dot, float": 645.842,
+    "quaternion rotate, double": 1937.824,
+    "quaternion rotate, float": 993.774,
+    "x += v*dt, double": 326.507,
+    "x += v*dt, f64::Length": 341.32,
+    "x += v*dt, float": 162.479
+  }
+}

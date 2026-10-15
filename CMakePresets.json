@@ -1,0 +1,181 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default (Release)",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0MATH_BUILD_TESTING": "ON",
+                "SUB0MATH_BUILD_BENCHMARKS": "ON"
+            }
+        },
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "binaryDir": "${sourceDir}/build-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SUB0MATH_BUILD_TESTING": "ON"
+            }
+        },
+        {
+            "name": "ci-unix",
+            "displayName": "CI - GCC/Clang",
+            "binaryDir": "${sourceDir}/build-ci",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0MATH_BUILD_TESTING": "ON",
+                "SUB0MATH_BUILD_BENCHMARKS": "ON",
+                "SUB0MATH_WARNINGS_AS_ERRORS": "ON"
+            },
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "ci-msvc",
+            "displayName": "CI - MSVC",
+            "binaryDir": "${sourceDir}/build-ci",
+            "cacheVariables": {
+                "SUB0MATH_BUILD_TESTING": "ON",
+                "SUB0MATH_BUILD_BENCHMARKS": "ON",
+                "SUB0MATH_WARNINGS_AS_ERRORS": "ON"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "ci-asan",
+            "displayName": "CI - ASan/UBSan",
+            "binaryDir": "${sourceDir}/build-asan",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+                "SUB0MATH_BUILD_TESTING": "ON"
+            },
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "profile",
+            "displayName": "Profile (optimised, debug info, frame pointers)",
+            "binaryDir": "${sourceDir}/build-profile",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0MATH_BUILD_TESTING": "ON",
+                "SUB0MATH_BUILD_BENCHMARKS": "ON",
+                "SUB0MATH_PROFILE_FLAGS": "ON"
+            }
+        },
+        {
+            "name": "vectorization",
+            "displayName": "Vectorization remarks (use tools/perf/vectorization_report.py)",
+            "binaryDir": "${sourceDir}/build-vec",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0MATH_BUILD_TESTING": "ON",
+                "SUB0MATH_BUILD_BENCHMARKS": "ON",
+                "SUB0MATH_VECTORIZATION_REPORT": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "configuration": "Release"
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ci-unix",
+            "configurePreset": "ci-unix"
+        },
+        {
+            "name": "ci-msvc",
+            "configurePreset": "ci-msvc",
+            "configuration": "Release"
+        },
+        {
+            "name": "ci-asan",
+            "configurePreset": "ci-asan"
+        },
+        {
+            "name": "profile",
+            "configurePreset": "profile",
+            "configuration": "Release"
+        },
+        {
+            "name": "vectorization",
+            "configurePreset": "vectorization",
+            "configuration": "Release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-unix",
+            "configurePreset": "ci-unix",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-msvc",
+            "configurePreset": "ci-msvc",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-asan",
+            "configurePreset": "ci-asan",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "profile",
+            "configurePreset": "profile",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

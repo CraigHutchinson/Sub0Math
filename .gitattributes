@@ -1,0 +1,9 @@
+# Auto-detect text files and normalise to LF in the repo
+* text=auto eol=lf
+
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# Vendored test dependencies: never convert
+tests/vendor/doctest.h   binary
+tests/vendor/nanobench.h binary
