@@ -10,7 +10,8 @@ sub0math_target_perf_options(MyLibrary)                       # profile / vector
 sub0math_add_benchmark(MyLibrary_Bench bench_my_library.cpp)    # plus _json/_check/_baseline/_vtune_*/...
 ```
 
-Benchmarks include `<bench_runner.hpp>` and accept `--filter` (case-insensitive substring), `--json`,
+Configuring writes the scripts' location to `<build>/sub0math_tooling_dir.txt`, so shells and CI can run
+them without knowing where CPM put Sub0Math. Benchmarks include `<bench_runner.hpp>` and accept `--filter` (case-insensitive substring), `--json`,
 `--soak <seconds>` (loop under a profiler) and `--list`.
 
 ## Codified gates

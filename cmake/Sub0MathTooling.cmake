@@ -25,6 +25,11 @@ option(SUB0MATH_NATIVE_ARCH "Tune for the build machine's CPU (local experiments
 set(SUB0MATH_PROFILE_FILTER "" CACHE STRING "Benchmark name substring the profiling targets run")
 set(SUB0MATH_PROFILE_SECONDS "10" CACHE STRING "Soak seconds per benchmark under a profiler")
 
+# Where the scripts are, for shells and CI: `python "$(cat build/sub0math_tooling_dir.txt)/profile.py" ...`.
+# CPM may place Sub0Math anywhere, so consumers should not hard-code the path.
+get_filename_component(_sub0math_tooling_dir "${CMAKE_CURRENT_LIST_DIR}/../tools/perf" ABSOLUTE)
+file(WRITE "${CMAKE_BINARY_DIR}/sub0math_tooling_dir.txt" "${_sub0math_tooling_dir}")
+
 cmake_host_system_information(RESULT _sub0math_host QUERY HOSTNAME)
 string(TOLOWER "${_sub0math_host}" _sub0math_host)
 set(SUB0MATH_PERF_HOST "${_sub0math_host}" CACHE STRING "Baseline name in perf/baselines/")
