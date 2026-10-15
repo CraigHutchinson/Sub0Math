@@ -161,8 +161,37 @@ public:
         return Quantity<DimensionQuotient<dim::Dimensionless, D>, Rep>::fromSi(dividend / q.value_);
     }
 
-    friend constexpr bool operator==(const Quantity&, const Quantity&) noexcept = default;
-    friend constexpr auto operator<=>(const Quantity&, const Quantity&) noexcept = default;
+    // Direct comparisons: a defaulted <=> on floating point goes through std::partial_ordering, which
+    // measured slower in tight min/compare loops than comparing the stored numbers.
+    friend constexpr bool operator==(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ == b.value_;
+    }
+
+    friend constexpr bool operator<(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ < b.value_;
+    }
+
+    friend constexpr bool operator<=(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ <= b.value_;
+    }
+
+    friend constexpr bool operator>(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ > b.value_;
+    }
+
+    friend constexpr bool operator>=(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ >= b.value_;
+    }
+
+    friend constexpr std::partial_ordering operator<=>(const Quantity& a, const Quantity& b) noexcept
+    {
+        return a.value_ <=> b.value_;
+    }
 
 private:
     Rep value_{};

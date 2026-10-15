@@ -55,19 +55,17 @@ struct Vec : detail::Components<T, N>
 
     constexpr Vec& operator+=(const Vec& other) noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            this->at(i) += other.at(i);
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            this->template get<i>() += other.template get<i>();
+        });
         return *this;
     }
 
     constexpr Vec& operator-=(const Vec& other) noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            this->at(i) -= other.at(i);
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            this->template get<i>() -= other.template get<i>();
+        });
         return *this;
     }
 
@@ -85,10 +83,9 @@ struct Vec : detail::Components<T, N>
 
     friend constexpr Vec operator-(Vec v) noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            v.at(i) = -v.at(i);
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            v.template get<i>() = -v.template get<i>();
+        });
         return v;
     }
 
@@ -127,10 +124,9 @@ template<typename T, std::size_t N, typename S>
 [[nodiscard]] constexpr Vec<T, N> operator*(Vec<T, N> v, S factor) noexcept
 {
     const auto f = static_cast<ScalarOf<T>>(factor);
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        v[i] = v[i] * f;
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        v.template get<i>() = v.template get<i>() * f;
+    });
     return v;
 }
 
@@ -160,10 +156,9 @@ template<typename T, std::size_t N, typename S>
 [[nodiscard]] constexpr Vec<T, N> operator/(Vec<T, N> v, S divisor) noexcept
 {
     const auto d = static_cast<ScalarOf<T>>(divisor);
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        v[i] = v[i] / d;
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        v.template get<i>() = v.template get<i>() / d;
+    });
     return v;
 }
 
@@ -179,10 +174,9 @@ template<typename T, std::size_t N, typename Q>
 [[nodiscard]] constexpr Vec<ProductType<T, Q>, N> operator*(const Vec<T, N>& v, const Q& q) noexcept
 {
     Vec<ProductType<T, Q>, N> out{};
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        out[i] = v[i] * q;
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = v.template get<i>() * q;
+    });
     return out;
 }
 
@@ -198,10 +192,9 @@ template<typename T, std::size_t N, typename Q>
 [[nodiscard]] constexpr Vec<ProductType<Q, T>, N> operator*(const Q& q, const Vec<T, N>& v) noexcept
 {
     Vec<ProductType<Q, T>, N> out{};
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        out[i] = q * v[i];
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = q * v.template get<i>();
+    });
     return out;
 }
 
@@ -218,10 +211,9 @@ template<typename T, std::size_t N, typename Q>
                                                                                         const Q& q) noexcept
 {
     Vec<decltype(std::declval<T>() / std::declval<Q>()), N> out{};
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        out[i] = v[i] / q;
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = v.template get<i>() / q;
+    });
     return out;
 }
 
@@ -235,11 +227,12 @@ template<typename T, std::size_t N, typename Q>
 template<typename A, typename B, std::size_t N>
 [[nodiscard]] constexpr ProductType<A, B> dot(const Vec<A, N>& a, const Vec<B, N>& b) noexcept
 {
-    ProductType<A, B> sum{};
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        sum += a[i] * b[i];
-    }
+    // Start from the first product: under IEEE rules 0.0 + x cannot be folded away (signed zero), so a
+    // zero-initialised sum would cost an extra addition on every call.
+    ProductType<A, B> sum = a.template get<0>() * b.template get<0>();
+    detail::forEachComponent<N - 1>([&](auto i) {
+        sum += a.template get<i + 1>() * b.template get<i + 1>();
+    });
     return sum;
 }
 
@@ -292,10 +285,9 @@ template<typename T, std::size_t N>
 {
     const T n = length(v);
     Vec<ScalarOf<T>, N> out{};
-    for (std::size_t i = 0; i < N; ++i)
-    {
-        out[i] = static_cast<ScalarOf<T>>(v[i] / n);
-    }
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = static_cast<ScalarOf<T>>(v.template get<i>() / n);
+    });
     return out;
 }
 

@@ -54,19 +54,17 @@ struct Point : detail::Components<T, N>
 
     constexpr Point& operator+=(const Vec<T, N>& offset) noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            this->at(i) += offset[i];
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            this->template get<i>() += offset.template get<i>();
+        });
         return *this;
     }
 
     constexpr Point& operator-=(const Vec<T, N>& offset) noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            this->at(i) -= offset[i];
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            this->template get<i>() -= offset.template get<i>();
+        });
         return *this;
     }
 
@@ -85,10 +83,9 @@ struct Point : detail::Components<T, N>
     friend constexpr Vec<T, N> operator-(const Point& a, const Point& b) noexcept
     {
         Vec<T, N> d{};
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            d[i] = a[i] - b[i];
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            d.template get<i>() = a.template get<i>() - b.template get<i>();
+        });
         return d;
     }
 

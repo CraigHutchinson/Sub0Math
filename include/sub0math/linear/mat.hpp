@@ -94,14 +94,10 @@ template<Real T, std::size_t R, std::size_t C>
 template<Real T, std::size_t R, std::size_t C, typename U>
 [[nodiscard]] constexpr Vec<ProductType<T, U>, R> operator*(const Mat<T, R, C>& m, const Vec<U, C>& v) noexcept
 {
-    Vec<ProductType<T, U>, R> out{};
-    for (std::size_t c = 0; c < C; ++c)
-    {
-        for (std::size_t r = 0; r < R; ++r)
-        {
-            out[r] += m(r, c) * v[c];
-        }
-    }
+    // Sum of columns scaled by v's components: contiguous, no runtime component index, and starting from
+    // the first column rather than zero (0.0 + x is not foldable under IEEE rules).
+    Vec<ProductType<T, U>, R> out = m.columns[0] * v.template get<0>();
+    detail::forEachComponent<C - 1>([&](auto c) { out += m.columns[c + 1] * v.template get<c + 1>(); });
     return out;
 }
 

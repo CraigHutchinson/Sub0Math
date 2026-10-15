@@ -32,11 +32,10 @@ struct Aabb
     [[nodiscard]] static constexpr Aabb fromCorners(const Point<T, N>& a, const Point<T, N>& b) noexcept
     {
         Aabb box{a, a};
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            box.lo[i] = std::min(a[i], b[i]);
-            box.hi[i] = std::max(a[i], b[i]);
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            box.lo.template get<i>() = std::min(a.template get<i>(), b.template get<i>());
+            box.hi.template get<i>() = std::max(a.template get<i>(), b.template get<i>());
+        });
         return box;
     }
 
@@ -54,14 +53,11 @@ struct Aabb
      */
     [[nodiscard]] constexpr bool contains(const Point<T, N>& p) const noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            if (p[i] < lo[i] || p[i] > hi[i])
-            {
-                return false;
-            }
-        }
-        return true;
+        bool inside = true;
+        detail::forEachComponent<N>([&](auto i) {
+            inside = inside && !(p.template get<i>() < lo.template get<i>() || p.template get<i>() > hi.template get<i>());
+        });
+        return inside;
     }
 
     /**
@@ -72,14 +68,12 @@ struct Aabb
      */
     [[nodiscard]] constexpr bool intersects(const Aabb& other) const noexcept
     {
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            if (other.hi[i] < lo[i] || other.lo[i] > hi[i])
-            {
-                return false;
-            }
-        }
-        return true;
+        bool overlaps = true;
+        detail::forEachComponent<N>([&](auto i) {
+            overlaps = overlaps
+                && !(other.hi.template get<i>() < lo.template get<i>() || other.lo.template get<i>() > hi.template get<i>());
+        });
+        return overlaps;
     }
 
     /**
@@ -91,11 +85,10 @@ struct Aabb
     [[nodiscard]] constexpr Aabb including(const Point<T, N>& p) const noexcept
     {
         Aabb box = *this;
-        for (std::size_t i = 0; i < N; ++i)
-        {
-            box.lo[i] = std::min(box.lo[i], p[i]);
-            box.hi[i] = std::max(box.hi[i], p[i]);
-        }
+        detail::forEachComponent<N>([&](auto i) {
+            box.lo.template get<i>() = std::min(box.lo.template get<i>(), p.template get<i>());
+            box.hi.template get<i>() = std::max(box.hi.template get<i>(), p.template get<i>());
+        });
         return box;
     }
 

@@ -1,5 +1,6 @@
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include <bench_runner.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -87,6 +88,52 @@ void benchMat4(sub0bench::BenchRunner& runner, const char* name)
     });
 }
 
+// Nearest-point distance from points to segments, the kernel of a terrain clearance query: once on
+// plain scalars written by hand, once through Point/Vec with quantity components. Their gap is the whole
+// cost of the vocabulary.
+void benchSegmentDistance(sub0bench::BenchRunner& runner)
+{
+    std::vector<double> xs(Count + 1);
+    std::vector<double> ys(Count + 1);
+    for (std::size_t i = 0; i <= Count; ++i)
+    {
+        xs[i] = static_cast<double>(i) * 0.01;
+        ys[i] = 0.05 * static_cast<double>(i % 7);
+    }
+    const double cx = 3.0;
+    const double cy = 0.4;
+    runner.run("segment distance^2, hand-written scalars", [&] {
+        double best = 1e300;
+        for (std::size_t i = 0; i < Count; ++i)
+        {
+            const double abx = xs[i + 1] - xs[i];
+            const double aby = ys[i + 1] - ys[i];
+            const double t = std::clamp(((cx - xs[i]) * abx + (cy - ys[i]) * aby) / (abx * abx + aby * aby), 0.0, 1.0);
+            const double dx = cx - (xs[i] + abx * t);
+            const double dy = cy - (ys[i] + aby * t);
+            best = std::min(best, dx * dx + dy * dy);
+        }
+        ankerl::nanobench::doNotOptimizeAway(best);
+    });
+
+    std::vector<Point2<f64::Length>> points(Count + 1);
+    for (std::size_t i = 0; i <= Count; ++i)
+    {
+        points[i] = {f64::Length::fromSi(xs[i]), f64::Length::fromSi(ys[i])};
+    }
+    const Point2<f64::Length> c{f64::Length::fromSi(cx), f64::Length::fromSi(cy)};
+    runner.run("segment distance^2, Point2<f64::Length>", [&] {
+        f64::Area best = f64::Area::fromSi(1e300);
+        for (std::size_t i = 0; i < Count; ++i)
+        {
+            const Vec2<f64::Length> ab = points[i + 1] - points[i];
+            const double t = std::clamp(static_cast<double>(dot(c - points[i], ab) / dot(ab, ab)), 0.0, 1.0);
+            best = std::min(best, lengthSquared(c - (points[i] + ab * t)));
+        }
+        ankerl::nanobench::doNotOptimizeAway(best);
+    });
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -108,5 +155,7 @@ int main(int argc, char** argv)
 
     benchMat4<double>(runner, "Mat4 * Vec4, double");
     benchMat4<float>(runner, "Mat4 * Vec4, float");
+
+    benchSegmentDistance(runner);
     return runner.finish();
 }

@@ -19,7 +19,7 @@ them without knowing where CPM put Sub0Math. Benchmarks include `<bench_runner.h
 | Gate | Where | Contract |
 |---|---|---|
 | Zero size overhead | `static_assert`s in the tests | Quantities, roles, vectors and matrices are exactly the size of their numbers and trivially copyable |
-| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins within noise |
+| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins, and `segment distance^2, Point2<f64::Length>` matches the hand-written scalar kernel, within noise |
 | Wrong code does not compile | Concept checks in the tests | Dimension mismatches, swapped or unnamed roles, silent narrowing, point + point |
 | Header self-containment | `Sub0Math_HeaderCheck` | Every public header compiles alone under the strict warning set |
 
@@ -75,11 +75,23 @@ Rules for math code:
 - Prefer float where precision allows: it halves memory traffic and doubles SIMD width.
 - Structure-of-arrays layouts and explicit SIMD belong in the consumer's hot loops, not in the vocabulary.
 
+## Findings
+
+| Date | Finding | Evidence | Action |
+|---|---|---|---|
+| 2026-10-15 | Component loops over the runtime `at(i)` cost ~45% in a 2D point-to-segment kernel; the `Vec<double>` vs `Vec<Length>` pairs could not see it because both sides paid | Sub0Physics budget gate (+52% on its clearance benchmark after adopting Sub0Math) | `forEachComponent` expands every component operation at compile time; new hand-written-vs-vocabulary benchmark pair |
+| 2026-10-15 | Zero-initialised sums in `dot` and `Mat * Vec` cost an extra add each: IEEE signed zero forbids folding `0.0 + x` | Same pair, remaining 12% | Sums start from the first product; the pair is now equal (1565 vs 1561 ns) |
+| 2026-10-15 | Defaulted `<=>` on quantities goes through `std::partial_ordering` | Reasoning; no measurable change here | Direct relational operators on the stored value, kept for predictable codegen |
+
 ## Measured (development host, GCC 16, -O3)
 
 | Benchmark, 1024 elements | ns |
 |---|---:|
-| dot, double / f64::Length | 627 / 624 |
-| x += v*dt, double / f64::Length / float | 372 / 380 / 150 |
-| quaternion rotate, double / float | 1745 / 912 |
-| Mat4 * Vec4, double / float | 1271 / 966 |
+| dot, double / f64::Length | 711 / 688 |
+| x += v*dt, double / f64::Length / float | 359 / 321 / 162 |
+| quaternion rotate, double / float | 2061 / 1084 |
+| Mat4 * Vec4, double / float | 1251 / 823 |
+| segment distance^2, hand-written scalars / Point2<f64::Length> | 1561 / 1565 |
+
+Timings vary by a few percent run to run on a shared desktop; compare pairs measured together, and use
+best-of-N when judging a change.
