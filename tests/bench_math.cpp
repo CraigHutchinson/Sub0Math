@@ -1,6 +1,6 @@
 #define ANKERL_NANOBENCH_IMPLEMENT
-#include <bench_runner.hpp>
 #include <algorithm>
+#include <bench_runner.hpp>
 #include <cstddef>
 #include <vector>
 
@@ -122,13 +122,12 @@ void benchSegmentDistance(sub0bench::BenchRunner& runner)
         points[i] = {f64::Length::fromSi(xs[i]), f64::Length::fromSi(ys[i])};
     }
     const Point2<f64::Length> c{f64::Length::fromSi(cx), f64::Length::fromSi(cy)};
-    runner.run("segment distance^2, Point2<f64::Length>", [&] {
+    runner.run("segment distance^2, closestPoint(Segment<f64::Length>)", [&] {
         f64::Area best = f64::Area::fromSi(1e300);
         for (std::size_t i = 0; i < Count; ++i)
         {
-            const Vec2<f64::Length> ab = points[i + 1] - points[i];
-            const double t = std::clamp(static_cast<double>(dot(c - points[i], ab) / dot(ab, ab)), 0.0, 1.0);
-            best = std::min(best, lengthSquared(c - (points[i] + ab * t)));
+            const auto nearest = closestPoint(Segment<f64::Length, 2>{points[i], points[i + 1]}, c);
+            best = std::min(best, lengthSquared(c - nearest.point));
         }
         ankerl::nanobench::doNotOptimizeAway(best);
     });
