@@ -70,6 +70,8 @@ remarks for this project's own files only. Tests and header checks build with
 
 Rules for math code:
 
+- Mark short functions that consumers call in inner loops `SUB0MATH_FORCE_INLINE`; abstraction depth,
+  not size, is what defeats the inliner. Judge with a consumer's benchmark, not only Sub0Math's.
 - Value types only: trivially copyable, contiguous, no virtual calls, no allocation.
 - Quantities and roles must cost nothing: every abstraction gets a paired benchmark against plain numbers.
 - Prefer float where precision allows: it halves memory traffic and doubles SIMD width.
@@ -81,6 +83,7 @@ Rules for math code:
 |---|---|---|---|
 | 2026-10-15 | Component loops over the runtime `at(i)` cost ~45% in a 2D point-to-segment kernel; the `Vec<double>` vs `Vec<Length>` pairs could not see it because both sides paid | Sub0Physics budget gate (+52% on its clearance benchmark after adopting Sub0Math) | `forEachComponent` expands every component operation at compile time; new hand-written-vs-vocabulary benchmark pair |
 | 2026-10-15 | Zero-initialised sums in `dot` and `Mat * Vec` cost an extra add each: IEEE signed zero forbids folding `0.0 + x` | Same pair, remaining 12% | Sums start from the first product; the pair is now equal (1565 vs 1561 ns) |
+| 2026-10-15 | Adopting `closestPoint` in Sub0Physics made GCC stop inlining the caller's helper (one more call level): clearance +60%, invisible in Sub0Math's own benchmark | Consumer budget gate; `nm` showed an out-of-line `.isra` clone | `SUB0MATH_FORCE_INLINE` (`config.hpp`) on small functions that sit in callers' inner loops; clearance back to 414 ns |
 | 2026-10-15 | Defaulted `<=>` on quantities goes through `std::partial_ordering` | Reasoning; no measurable change here | Direct relational operators on the stored value, kept for predictable codegen |
 
 ## Measured (development host, GCC 16, -O3)

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 
+#include "sub0math/config.hpp"
 #include "sub0math/geometry/aabb.hpp"
 #include "sub0math/geometry/point.hpp"
 #include "sub0math/linear/vec.hpp"
@@ -49,7 +50,7 @@ struct SegmentPoint
  * @return The nearest point and its parameter.
  */
 template<typename T, std::size_t N>
-[[nodiscard]] constexpr SegmentPoint<T, N> closestPoint(const Segment<T, N>& segment, const Point<T, N>& p) noexcept
+[[nodiscard]] SUB0MATH_FORCE_INLINE constexpr SegmentPoint<T, N> closestPoint(const Segment<T, N>& segment, const Point<T, N>& p) noexcept
 {
     using Scalar = ScalarOf<T>;
     const Vec<T, N> ab = segment.b - segment.a;

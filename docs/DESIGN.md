@@ -69,6 +69,14 @@ using RetryCount = sub0math::Role<struct RetryCountTag, std::uint32_t>;
 - `RigidTransform<T, L>`: rotation then translation; `L` is the position type (`f64::Length` for physics).
 - `Aabb<T, N>`: inclusive axis-aligned boxes.
 
+## Shapes
+
+Shapes are values in their own frame, generic over the coordinate type: `Sphere<T, N>` (`Circle<T>`),
+`Segment<T, N>` with `closestPoint`, and `Aabb<T, N>`, each with `boundingBox` where it applies. They are
+added when a consumer needs them, and the API is refined by using it (ADR 0002). Converting a shape to
+triangles will be a function (`toMesh(shape, ...)`), not a type. Purposes that carry their own data
+(collision materials, render materials) belong to the layer that owns that data.
+
 ## Performance rules
 
 - Everything is `constexpr` where the standard library allows, `noexcept`, trivially copyable and the size

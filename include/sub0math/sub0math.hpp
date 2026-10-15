@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sub0math/config.hpp"
 #include "sub0math/geometry.hpp"
 #include "sub0math/linear.hpp"
 #include "sub0math/number.hpp"
