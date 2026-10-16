@@ -43,9 +43,10 @@ struct SegmentPoint
 /**
  * Finds the point of a segment nearest to a query point.
  *
- * `t` is clamped to [0, 1], so a result at an end is exactly 0 or 1 and identifies a vertex.
+ * `t` is clamped to [0, 1], so a result at an end is exactly 0 or 1 and identifies a vertex. A
+ * zero-length segment is a point: the result is `a` with t = 0.
  *
- * @param segment A segment of non-zero length.
+ * @param segment The segment.
  * @param p The query point.
  * @return The nearest point and its parameter.
  */
@@ -55,7 +56,10 @@ template<typename T, std::size_t N>
 {
     using Scalar = ScalarOf<T>;
     const Vec<T, N> ab = segment.b - segment.a;
-    const Scalar t = std::clamp(static_cast<Scalar>(dot(p - segment.a, ab) / dot(ab, ab)), Scalar{0}, Scalar{1});
+    const auto length2 = dot(ab, ab);
+    // PERF: zero-length guard measured within noise (predictable branch).
+    if (!(length2 > decltype(length2){})) return {segment.a, Scalar{0}};
+    const Scalar t = std::clamp(static_cast<Scalar>(dot(p - segment.a, ab) / length2), Scalar{0}, Scalar{1});
     return {segment.a + ab * t, t};
 }
 

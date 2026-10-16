@@ -65,6 +65,8 @@ TEST_CASE("Closest point on a segment, with exact end parameters")
     static_assert(closestPoint(s, Point2d{-3.0, 1.0}).t == 0.0); // exactly the start vertex
     static_assert(closestPoint(s, Point2d{9.0, -1.0}).t == 1.0); // exactly the end vertex
     static_assert(closestPoint(s, Point2d{9.0, -1.0}).point == s.b);
+    constexpr Segment<double, 2> degenerate{{1.0, 1.0}, {1.0, 1.0}}; // zero length: a point
+    static_assert(closestPoint(degenerate, Point2d{5.0, 5.0}).point == degenerate.a && closestPoint(degenerate, Point2d{5.0, 5.0}).t == 0.0);
 
     using namespace sub0math::f64::literals;
     const Segment<f64::Length, 3> lever{{0_m, 0_m, 0_m}, {0_m, 0_m, 2_m}};

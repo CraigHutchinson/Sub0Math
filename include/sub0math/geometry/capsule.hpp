@@ -35,10 +35,6 @@ struct Capsule
 template<typename T, std::size_t N>
 [[nodiscard]] T signedDistance(const Capsule<T, N>& capsule, const Point<T, N>& p) noexcept
 {
-    if (capsule.axis.a == capsule.axis.b)
-    {
-        return length(p - capsule.axis.a) - capsule.radius;
-    }
     return length(p - closestPoint(capsule.axis, p).point) - capsule.radius;
 }
 
@@ -52,8 +48,7 @@ template<typename T, std::size_t N>
 template<typename T, std::size_t N>
 [[nodiscard]] constexpr bool contains(const Capsule<T, N>& capsule, const Point<T, N>& p) noexcept
 {
-    const Point<T, N> nearest = capsule.axis.a == capsule.axis.b ? capsule.axis.a : closestPoint(capsule.axis, p).point;
-    return lengthSquared(p - nearest) <= capsule.radius * capsule.radius;
+    return lengthSquared(p - closestPoint(capsule.axis, p).point) <= capsule.radius * capsule.radius;
 }
 
 /**
