@@ -4,9 +4,12 @@
 #       Applies the profiling, vectorization-report and native-architecture options to a target.
 #   sub0math_add_benchmark(<target> <sources>...)
 #       Builds a nanobench executable using tools/perf/bench_runner.hpp, plus these targets:
-#         <target>_json             run it and write build/perf/<target>.json
-#         <target>_check            best of SUB0MATH_BENCH_REPEATS runs vs perf/baselines/<host>.json
-#         <target>_baseline         record perf/baselines/<host>.json (best of the same runs)
+#         <target>_json             run it once and write build/perf/<target>.json (nanobench format)
+#         <target>_runs             SUB0MATH_BENCH_REPEATS interleaved, calibrated rounds -> <target>.samples.json
+#         <target>_check            judge those rounds against perf/baselines/<host>.json; fails on a regression
+#         <target>_baseline         record perf/baselines/<host>.json from the same rounds
+#       and, unless SUB0MATH_PERF_ON_BUILD is OFF, a quick check after every rebuild of <target>
+#       (its code or a header it uses changed), reporting regressions and progressions implicitly.
 #         <target>_vtune_hotspots   VTune hotspots      (SUB0MATH_PROFILE_FILTER, _SECONDS)
 #         <target>_vtune_uarch      VTune microarchitecture exploration
 #         <target>_advisor_roofline Intel Advisor vectorization survey and roofline
@@ -24,7 +27,12 @@ option(SUB0MATH_VECTORIZATION_REPORT "Emit compiler vectorization remarks" OFF)
 option(SUB0MATH_NATIVE_ARCH "Tune for the build machine's CPU (local experiments only)" OFF)
 set(SUB0MATH_PROFILE_FILTER "" CACHE STRING "Benchmark name substring the profiling targets run")
 set(SUB0MATH_PROFILE_SECONDS "10" CACHE STRING "Soak seconds per benchmark under a profiler")
-set(SUB0MATH_BENCH_REPEATS "5" CACHE STRING "Benchmark runs per budget check; each benchmark's best run is compared")
+set(SUB0MATH_BENCH_REPEATS "5" CACHE STRING "Interleaved rounds per budget check (tools/perf/bench_check.py)")
+set(SUB0MATH_PERF_ON_BUILD "REPORT" CACHE STRING
+    "After a benchmark executable is rebuilt: OFF, REPORT (print regressions and progressions) or ENFORCE (fail the build on a regression)")
+set_property(CACHE SUB0MATH_PERF_ON_BUILD PROPERTY STRINGS OFF REPORT ENFORCE)
+set(SUB0MATH_PERF_QUICK_ROUNDS "3" CACHE STRING "Rounds for the after-build check (noisy benchmarks get up to twice as many)")
+set(SUB0MATH_PERF_QUICK_EPOCHS "5" CACHE STRING "nanobench epochs per measurement in the after-build check")
 
 # Where the scripts are, for shells and CI: `python "$(cat build/sub0math_tooling_dir.txt)/profile.py" ...`.
 # CPM may place Sub0Math anywhere, so consumers should not hard-code the path.
@@ -69,12 +77,7 @@ function(sub0math_add_benchmark target)
         return()
     endif()
     set(results "${CMAKE_BINARY_DIR}/perf/${target}.json")
-    set(repeat_commands "")
-    set(repeat_results "")
-    foreach(run RANGE 1 ${SUB0MATH_BENCH_REPEATS})
-        list(APPEND repeat_commands COMMAND $<TARGET_FILE:${target}> --json "${CMAKE_BINARY_DIR}/perf/${target}.run${run}.json")
-        list(APPEND repeat_results "${CMAKE_BINARY_DIR}/perf/${target}.run${run}.json")
-    endforeach()
+    set(samples "${CMAKE_BINARY_DIR}/perf/${target}.samples.json")
     set(baseline "${PROJECT_SOURCE_DIR}/perf/baselines/${SUB0MATH_PERF_HOST}.json")
     set(check "${tooling}/bench_check.py")
     set(profile "${tooling}/profile.py")
@@ -83,17 +86,31 @@ function(sub0math_add_benchmark target)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/perf"
         COMMAND $<TARGET_FILE:${target}> --json "${results}"
         DEPENDS ${target} USES_TERMINAL VERBATIM)
-    # Budgets use best-of-N repeated runs (SUB0MATH_BENCH_REPEATS): steady on a busy desktop.
+    # Interleaved, calibrated, load-aware rounds: see tools/perf/bench_check.py.
     add_custom_target(${target}_runs
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/perf"
-        ${repeat_commands}
+        COMMAND ${Python3_EXECUTABLE} "${check}" run --exe $<TARGET_FILE:${target}> --out "${samples}"
+                --rounds ${SUB0MATH_BENCH_REPEATS}
         DEPENDS ${target} USES_TERMINAL VERBATIM)
     add_custom_target(${target}_check
-        COMMAND ${Python3_EXECUTABLE} "${check}" check --results ${repeat_results} --baseline "${baseline}"
+        COMMAND ${Python3_EXECUTABLE} "${check}" check --results "${samples}" --baseline "${baseline}"
         DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
     add_custom_target(${target}_baseline
-        COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results ${repeat_results} --baseline "${baseline}"
+        COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results "${samples}" --baseline "${baseline}"
         DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
+
+    # Implicit report: the executable relinks only when its code, or a header it uses, changed.
+    if(NOT SUB0MATH_PERF_ON_BUILD STREQUAL "OFF")
+        set(mode_args --report-only)
+        if(SUB0MATH_PERF_ON_BUILD STREQUAL "ENFORCE")
+            set(mode_args "")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E echo "perf: quick interleaved check of ${target} (SUB0MATH_PERF_ON_BUILD=${SUB0MATH_PERF_ON_BUILD})"
+            COMMAND ${Python3_EXECUTABLE} "${check}" auto --exe $<TARGET_FILE:${target}> --baseline "${baseline}"
+                    --rounds ${SUB0MATH_PERF_QUICK_ROUNDS} --epochs ${SUB0MATH_PERF_QUICK_EPOCHS}
+                    --out "${CMAKE_BINARY_DIR}/perf/${target}.quick.json" ${mode_args}
+            VERBATIM)
+    endif()
 
     foreach(analysis vtune-hotspots vtune-uarch advisor-roofline perf-record)
         string(REPLACE "-" "_" suffix "${analysis}")

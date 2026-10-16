@@ -1,28 +1,132 @@
 {
+  "format": 2,
   "host": "CrogLegion",
   "machine": "AMD64",
   "system": "Windows 11",
-  "note": "Median ns per op from nanobench. Regenerate deliberately; say why in the commit.",
+  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit.",
+  "calibration_ns": 4794.73,
   "benchmarks": {
-    "Mat4 * Vec4, double": 1055.818,
-    "Mat4 * Vec4, float": 721.263,
-    "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": 1548.362,
-    "box vs 1024 blocks, AabbOverlapTester(centre, half)": 1240.007,
-    "box vs 1024 blocks, hand-written 2D SAT": 1078.321,
-    "dot, double": 574.402,
-    "dot, f32::Length": 568.875,
-    "dot, f64::Length": 567.948,
-    "dot, float": 568.992,
-    "quaternion rotate, double": 1722.93,
-    "quaternion rotate, float": 898.367,
-    "ray vs triangles, hand-written Moller-Trumbore": 3479.738,
-    "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": 3317.1,
-    "segment distance^2, closestPoint(Segment<f64::Length>)": 1565.156,
-    "segment distance^2, hand-written scalars": 1562.714,
-    "triangle closest point, closestPoint(Triangle<f64::Length>)": 3243.181,
-    "triangle closest point, hand-written scalars": 3123.088,
-    "x += v*dt, double": 277.817,
-    "x += v*dt, f64::Length": 271.559,
-    "x += v*dt, float": 131.685
+    "Mat4 * Vec4, double": {
+      "median_ns": 1324.345,
+      "cv": 0.0168,
+      "rounds": 5
+    },
+    "Mat4 * Vec4, float": {
+      "median_ns": 895.914,
+      "cv": 0.0023,
+      "rounds": 5
+    },
+    "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
+      "median_ns": 1748.392,
+      "cv": 0.0145,
+      "rounds": 5
+    },
+    "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
+      "median_ns": 1327.364,
+      "cv": 0.0173,
+      "rounds": 5
+    },
+    "box vs 1024 blocks, hand-written 2D SAT": {
+      "median_ns": 1392.188,
+      "cv": 0.0171,
+      "rounds": 5
+    },
+    "dot, double": {
+      "median_ns": 689.915,
+      "cv": 0.0156,
+      "rounds": 5
+    },
+    "dot, f32::Length": {
+      "median_ns": 662.775,
+      "cv": 0.003,
+      "rounds": 5
+    },
+    "dot, f64::Length": {
+      "median_ns": 680.856,
+      "cv": 0.0063,
+      "rounds": 5
+    },
+    "dot, float": {
+      "median_ns": 666.335,
+      "cv": 0.0208,
+      "rounds": 5
+    },
+    "quaternion rotate, double": {
+      "median_ns": 2207.538,
+      "cv": 0.018,
+      "rounds": 5
+    },
+    "quaternion rotate, float": {
+      "median_ns": 1105.152,
+      "cv": 0.0077,
+      "rounds": 5
+    },
+    "ray vs triangles, hand-written Moller-Trumbore": {
+      "median_ns": 4021.778,
+      "cv": 0.0017,
+      "rounds": 5
+    },
+    "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
+      "median_ns": 3948.903,
+      "cv": 0.0156,
+      "rounds": 5
+    },
+    "segment distance^2, closestPoint(Segment<f64::Length>)": {
+      "median_ns": 1918.645,
+      "cv": 0.0124,
+      "rounds": 5
+    },
+    "segment distance^2, hand-written scalars": {
+      "median_ns": 1916.827,
+      "cv": 0.0094,
+      "rounds": 5
+    },
+    "triangle closest point, closestPoint(Triangle<f64::Length>)": {
+      "median_ns": 4459.01,
+      "cv": 0.0178,
+      "rounds": 5
+    },
+    "triangle closest point, hand-written scalars": {
+      "median_ns": 4426.225,
+      "cv": 0.0338,
+      "rounds": 5
+    },
+    "x += v*dt, double": {
+      "median_ns": 382.853,
+      "cv": 0.0217,
+      "rounds": 5
+    },
+    "x += v*dt, f64::Length": {
+      "median_ns": 375.655,
+      "cv": 0.0223,
+      "rounds": 5
+    },
+    "x += v*dt, float": {
+      "median_ns": 184.563,
+      "cv": 0.0147,
+      "rounds": 5
+    }
+  },
+  "pairs": {
+    "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
+      "reference": "box vs 1024 blocks, hand-written 2D SAT",
+      "ratio": 1.2461
+    },
+    "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
+      "reference": "box vs 1024 blocks, hand-written 2D SAT",
+      "ratio": 0.9536
+    },
+    "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
+      "reference": "ray vs triangles, hand-written Moller-Trumbore",
+      "ratio": 0.9809
+    },
+    "segment distance^2, closestPoint(Segment<f64::Length>)": {
+      "reference": "segment distance^2, hand-written scalars",
+      "ratio": 1.0066
+    },
+    "triangle closest point, closestPoint(Triangle<f64::Length>)": {
+      "reference": "triangle closest point, hand-written scalars",
+      "ratio": 1.0074
+    }
   }
 }

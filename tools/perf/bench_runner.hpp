@@ -2,13 +2,19 @@
 
 // Shared command line for Sub0 family benchmark executables (nanobench based).
 //
-//   <bench> [--filter <text>] [--json <file>] [--soak <seconds>] [--list]
+//   <bench> [--filter <text>] [--exact <name>] [--epochs <n>] [--json <file>] [--soak <seconds>]
+//           [--list] [--calibration]
 //
-//   --filter  run only benchmarks whose name contains <text> (case-insensitive)
-//   --json    also write nanobench JSON results (input to tools/perf/bench_check.py)
-//   --soak    instead of measuring, loop each selected benchmark for <seconds>; use under a profiler
-//             (VTune, Advisor, perf) so the hot path dominates the samples
-//   --list    print benchmark names and exit
+//   --filter       run only benchmarks whose name contains <text> (case-insensitive)
+//   --exact        run only the benchmark with exactly this name (bench_check.py interleaves with it)
+//   --epochs       override every benchmark's epoch count (fewer = quicker, noisier)
+//   --json         also write nanobench JSON results
+//   --soak         instead of measuring, loop each selected benchmark for <seconds>; use under a profiler
+//                  (VTune, Advisor, perf) so the hot path dominates the samples
+//   --list         print benchmark names and exit
+//   --calibration  measure only the built-in calibration kernel: a fixed dependent arithmetic chain whose
+//                  time tracks the core's clock. bench_check.py uses it to correct for frequency and
+//                  thermal changes within and between runs
 //
 // Include after defining ANKERL_NANOBENCH_IMPLEMENT in exactly one translation unit.
 
@@ -48,17 +54,33 @@ public:
             {
                 soakSeconds_ = std::atof(argv[++i]);
             }
+            else if (arg == "--exact" && hasValue)
+            {
+                exact_ = argv[++i];
+            }
+            else if (arg == "--epochs" && hasValue)
+            {
+                epochs_ = std::atoi(argv[++i]);
+            }
             else if (arg == "--list")
             {
                 list_ = true;
             }
+            else if (arg == "--calibration")
+            {
+                calibration_ = true;
+            }
             else
             {
-                std::fprintf(stderr, "usage: %s [--filter text] [--json file] [--soak seconds] [--list]\n", argv[0]);
+                std::fprintf(stderr, "usage: %s [--filter text] [--exact name] [--epochs n] [--json file] [--soak seconds] [--list] [--calibration]\n", argv[0]);
                 std::exit(2);
             }
         }
         bench_.title(title).warmup(100).minEpochIterations(10).performanceCounters(true);
+        if (calibration_)
+        {
+            runCalibration();
+        }
     }
 
     // The underlying nanobench configuration, for per-benchmark settings (units, batch, epochs).
@@ -70,7 +92,7 @@ public:
     template<typename Op>
     void run(const char* name, Op&& op)
     {
-        if (!matches(name))
+        if (calibration_ || !matches(name))
         {
             return;
         }
@@ -96,6 +118,10 @@ public:
             std::printf("  %llu iterations\n", static_cast<unsigned long long>(iterations));
             return;
         }
+        if (epochs_ > 0)
+        {
+            bench_.epochs(static_cast<std::size_t>(epochs_));
+        }
         bench_.run(name, op);
         // Changing units or titles clears nanobench's own list, so keep every result here.
         results_.push_back(bench_.results().back());
@@ -108,7 +134,7 @@ public:
         {
             return 0;
         }
-        if (selected_ == 0)
+        if (selected_ == 0 && !calibration_)
         {
             std::fprintf(stderr, "no benchmark matches the filter\n");
             return 1;
@@ -122,9 +148,35 @@ public:
     }
 
 private:
-    // Case-insensitive substring match; an empty filter selects everything.
+    // A dependent chain: each step waits for the last, so its time tracks the clock, not memory or
+    // vectorisation. The "__" prefix keeps it apart from real benchmarks.
+    void runCalibration()
+    {
+        ankerl::nanobench::Bench cal;
+        cal.title("calibration").warmup(100).minEpochIterations(2000).epochs(epochs_ > 0 ? static_cast<std::size_t>(epochs_) : 11U);
+        // Coefficients read through volatile, so the compiler cannot fold the chain at compile time.
+        static volatile double scale = 0.9999999;
+        static volatile double offset = 1e-7;
+        cal.run("__calibration", [] {
+            const double k = scale;
+            const double c = offset;
+            double x = 1.0;
+            for (int i = 0; i < 4096; ++i)
+            {
+                x = x * k + c;
+            }
+            ankerl::nanobench::doNotOptimizeAway(x);
+        });
+        results_.push_back(cal.results().back());
+    }
+
+    // The exact name when --exact is given; otherwise a case-insensitive substring (empty selects all).
     [[nodiscard]] bool matches(std::string_view name) const
     {
+        if (!exact_.empty())
+        {
+            return name == exact_;
+        }
         const auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
         return filter_.empty()
             || std::search(name.begin(), name.end(), filter_.begin(), filter_.end(),
@@ -135,8 +187,11 @@ private:
     std::vector<ankerl::nanobench::Result> results_;
     std::string filter_;
     std::string json_;
+    std::string exact_;
     double soakSeconds_ = 0.0;
+    int epochs_ = 0;
     bool list_ = false;
+    bool calibration_ = false;
     int selected_ = 0;
 };
 

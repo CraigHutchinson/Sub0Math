@@ -38,21 +38,40 @@ weakened to give the vocabulary an equal footing. Where the vocabulary cannot ma
 ## Timing budgets (per host)
 
 ```bash
-cmake --preset default
-cmake --build --preset default --target Sub0Math_Bench_check      # fails if >10% slower than baseline
-cmake --build --preset default --target Sub0Math_Bench_baseline   # record this host's baseline
+cmake --build --preset default --target Sub0Math_Bench_check      # interleaved rounds; fails on a regression
+cmake --build --preset default --target Sub0Math_Bench_baseline   # record this host's baseline from them
 ```
 
-Budget targets run the benchmark `SUB0MATH_BENCH_REPEATS` times (default 5) and compare each benchmark's
-best run: background load only slows runs down, so best-of-N is steady on a busy desktop where single runs
-varied by 30%. Each benchmark is then judged relative to the suite's median change, because a busy or
-throttled machine slows everything alike (seen: every benchmark, hand-written kernels included, +8-23% at
-once). The host drift and raw changes are reported; `bench_check.py --absolute` judges without the
-correction, for CI or quiet machines, since a change that slows every benchmark equally would otherwise
-hide. Baselines live in `perf/baselines/<host>.json` (best median ns per op). Timings from one machine
-say nothing about another, so each host has its own file; a host without one passes and is told how to
-adopt the gate. Regenerate a baseline deliberately and say why in the commit. CI reports drift against
-`github-ubuntu` without blocking, because shared runners are noisy.
+**Implicit after every rebuild.** A benchmark executable relinks only when its code, or a header it
+uses, has changed. When it does, a quick check runs straight after the build (3 rounds of 5 epochs,
+about 25 s here) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUILD` controls this:
+
+| Value | Effect |
+|---|---|
+| `REPORT` (default) | Report only |
+| `ENFORCE` | A regression fails the build |
+| `OFF` | No check (CI uses this; its own job runs the full rounds) |
+
+**How a measurement is made robust** (`tools/perf/bench_check.py`):
+
+| Threat | Countermeasure |
+|---|---|
+| Thermal and turbo drift during a run | **Interleaved rounds:** every benchmark once per round, each in its own process, in an order shuffled per round (seeded). Drift spreads over all benchmarks instead of biasing the last ones |
+| Clock speed varying within and between runs | **Calibration:** a fixed dependent arithmetic chain (`--calibration`) is timed at the start and end of each round. Each sample is scaled by the clock interpolated at its position in the round. Baselines record calibration, so a slower session is corrected before judging. Measured here: the core runs about 3% slower at the end of a round than at its start |
+| Core migration and preemption | Each measurement is pinned to one logical CPU (`--cpu`, default the last) at raised priority. Spreads fell from a 2.7% median and 17.6% worst to 1.1% and 7.6%, and calibration from 0.6% to 0.1% |
+| Other load on the machine | **Load check:** CPU time used by other processes is sampled before each round. Above `--max-load` (20%) the run waits up to `--settle` seconds, then records the round as busy. The report states how many rounds ran busy |
+| Noise mistaken for change | **Variance:** a robust spread (median absolute deviation) per benchmark across rounds. A change must exceed both the tolerance (10%) and 3x the noise. Spread above `--max-cv` (5%) is **NOISY**: the quick check adds rounds for those benchmarks (up to double) and then reports them as inconclusive, never as passed or failed |
+| Host-dependent absolute times | **Pairs:** each hand-written reference's group is reported as a ratio taken from adjacent measurements in the same round. This is nearly independent of the host, so CI and new machines get it without a baseline |
+
+**Verdicts, reported implicitly in every check:** REGRESSED, IMPROVED (a progression: record it with
+`_baseline` and say why in the commit), ok, NOISY, new and missing, for benchmarks and for pair ratios
+(pair tolerance 5%).
+
+Baselines live in `perf/baselines/<host>.json`: median, spread and rounds per benchmark, calibration
+time, and pair ratios. Timings from one machine say nothing about another, so each host has its own.
+Baselines in the older format (a number per benchmark) are still read, judged against the suite's
+median drift, and should be re-recorded. CI uses `--report-only` against `github-ubuntu` and writes
+the report to the job summary, because shared runners are noisy.
 
 ## Profiling
 
