@@ -34,7 +34,8 @@ set(SUB0MATH_PERF_ON_BUILD "REPORT" CACHE STRING
     "After a benchmark executable is rebuilt: OFF, REPORT (print regressions and progressions) or ENFORCE (fail the build on a regression)")
 set_property(CACHE SUB0MATH_PERF_ON_BUILD PROPERTY STRINGS OFF REPORT ENFORCE)
 set(SUB0MATH_PERF_QUICK_ROUNDS "3" CACHE STRING "Rounds for the after-build check (noisy benchmarks get up to twice as many)")
-set(SUB0MATH_PERF_QUICK_EPOCHS "5" CACHE STRING "nanobench epochs per measurement in the after-build check")
+set(SUB0MATH_PERF_QUICK_EPOCHS "0" CACHE STRING
+    "nanobench epochs in the after-build check; 0 = default, the same method as baselines and records")
 if(DEFINED ENV{CI})
     set(_sub0math_hooks_default OFF)
 else()

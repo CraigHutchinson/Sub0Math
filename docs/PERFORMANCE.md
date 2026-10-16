@@ -43,8 +43,8 @@ cmake --build --preset default --target Sub0Math_Bench_baseline   # record this 
 ```
 
 **Implicit after every rebuild.** A benchmark executable relinks only when its code, or a header it
-uses, has changed. When it does, a quick check runs straight after the build (3 rounds of 5 epochs,
-about 25 s here) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUILD` controls this:
+uses, has changed. When it does, a quick check runs straight after the build (3 rounds at the
+same epochs as baselines, so absolute times compare like for like; about 35 s here) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUILD` controls this:
 
 | Value | Effect |
 |---|---|

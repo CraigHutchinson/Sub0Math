@@ -190,12 +190,12 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
 def run_command(args):
     names = list_names(args.exe, args.filter)
     samples, meta, positions = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    write_samples(args.out, args.exe, samples, meta, positions)
+    write_samples(args.out, args.exe, samples, meta, positions, args.epochs)
     return 0
 
 
-def write_samples(path, exe, samples, meta, positions):
-    record = {"format": 2, "exe": Path(exe).name, "host": platform.node(), "machine": platform.machine(),
+def write_samples(path, exe, samples, meta, positions, epochs=0):
+    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "host": platform.node(), "machine": platform.machine(),
               "system": f"{platform.system()} {platform.release()}", "rounds": meta, "samples": samples,
               "positions": positions}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +276,7 @@ def baseline_data(record):
             "system": record.get("system", f"{platform.system()} {platform.release()}"),
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
-            "calibration_ns": round(cal, 3),
+            "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0),
             "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"]}
                            for n, s in sorted(stats.items())},
             "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4)} for n, p in sorted(pairs.items())},
@@ -401,7 +401,11 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
             change, verdict = None, "new"
         pair_rows.append((name, p, bp, change, verdict))
 
-    env = {"rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
+    base_epochs = (baseline_path.get("epochs", 0) if isinstance(baseline_path, dict)
+                   else json.loads(Path(baseline_path).read_text(encoding="utf-8")).get("epochs", 0) if have_baseline else 0)
+    env = {"method": None if record.get("epochs", 0) == base_epochs else
+           f"epochs differ (now {record.get('epochs', 0) or 'default'}, baseline {base_epochs or 'default'}): absolute times are not like for like; pair ratios still are",
+           "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
            "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline}
     return rows, pair_rows, env
@@ -413,6 +417,8 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
     lines = [f"**Environment:** {env['rounds']} interleaved rounds; load max {env['max_load']:.0%}"
              f" ({env['busy_rounds']} round(s) above the limit); calibration {env['calibration_ns']:,.0f} ns,"
              f" spread {env['calibration_cv']:.1%}, clock drift first to last {env['clock_drift']:+.1%}."]
+    if env.get("method"):
+        lines.append(f"> Method mismatch: {env['method']}.")
     if abs(env["clock_drift"]) > 0.05:
         lines.append(f"> Clock drift of {env['clock_drift']:+.1%} during the run (thermal or power state); rounds are"
                      " scaled by calibration, but treat close calls with care.")
@@ -478,7 +484,8 @@ def auto_command(args):
         return 0  # the gate builds benchmarks itself and measures them once
     names = list_names(args.exe, args.filter)
     samples, meta, positions = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(args.exe).name}
+    record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(args.exe).name, "epochs": args.epochs,
+              "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total.
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate(record, args.baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
@@ -497,7 +504,7 @@ def auto_command(args):
                 v.append(statistics.median(v))
                 positions[n].append(0.5)
     if args.out:
-        write_samples(args.out, args.exe, samples, meta, positions)
+        write_samples(args.out, args.exe, samples, meta, positions, args.epochs)
     if args.record and args.target:
         save_record(Path(args.repo or "."), args.target, record, only_if_missing=True)
     _, _, regressed = report(record, args)
@@ -606,7 +613,7 @@ def gate_command(args):
         exe = t["exe"]
         names = list_names(exe, "")
         samples, meta, positions = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-        record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(exe).name,
+        record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(exe).name, "epochs": args.epochs,
                   "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
         save_record(repo, target, record)  # the record before push
         args.baseline = t["baseline"]
@@ -735,7 +742,7 @@ def main():
     PIN_CPU = None if args.cpu == -2 else ((os.cpu_count() or 1) - 1 if args.cpu == -1 else args.cpu)
     if args.command == "gate":
         args.rounds = args.rounds if args.rounds != 5 else 3
-        args.epochs = args.epochs or 5
+        # Same method as baselines and records (default epochs), so absolute times compare like for like.
     commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
                 "accept": accept_command, "gate": gate_command, "install-hooks": install_hooks_command,
                 "note-checkout": note_checkout_command}
