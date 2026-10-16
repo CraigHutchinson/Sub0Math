@@ -14,6 +14,7 @@ namespace sub0math::detail
 // over the runtime `at(i)` cost about 45% in a 2D distance kernel. `at(i)` remains for runtime indices.
 
 // Calls f(std::integral_constant<std::size_t, I>{}) for I = 0..N-1, fully expanded.
+// PERF: compile-time expansion ~45% faster than runtime at(i) loops.
 template<std::size_t N, typename F>
 constexpr void forEachComponent(F&& f)
 {

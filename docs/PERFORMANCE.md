@@ -19,9 +19,21 @@ them without knowing where CPM put Sub0Math. Benchmarks include `<bench_runner.h
 | Gate | Where | Contract |
 |---|---|---|
 | Zero size overhead | `static_assert`s in the tests | Quantities, roles, vectors and matrices are exactly the size of their numbers and trivially copyable |
-| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins, and `segment distance^2, Point2<f64::Length>` matches the hand-written scalar kernel, within noise |
+| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins. Segment, triangle closest point and ray-triangle on `f64::Length` match their hand-written scalar kernels, within noise. Box against blocks: see the open gaps |
 | Wrong code does not compile | Concept checks in the tests | Dimension mismatches, swapped or unnamed roles, silent narrowing, point + point |
 | Header self-containment | `Sub0Math_HeaderCheck` | Every public header compiles alone under the strict warning set |
+
+### The hand-written reference is the fastest version
+
+In each pair, the hand-written side is the fastest code we know how to write for that job, including
+any shortcut the job allows (for example, block centres taken straight from a grid index). It is never
+weakened to give the vocabulary an equal footing. Where the vocabulary cannot match it:
+
+1. Iterate on the implementation.
+2. If a gap remains, change the API's shape so callers can close it (an entry point taking the data the
+   fast path needs, a prepared object that hoists invariant work).
+3. If it still remains, record it under [Open gaps](#open-gaps) with its measured size and a focused
+   follow-up.
 
 ## Timing budgets (per host)
 
@@ -91,6 +103,9 @@ Rules for math code:
 | 2026-10-15 | Zero-initialised sums in `dot` and `Mat * Vec` cost an extra add each: IEEE signed zero forbids folding `0.0 + x` | Same pair, remaining 12% | Sums start from the first product; the pair is now equal (1565 vs 1561 ns) |
 | 2026-10-15 | Adopting `closestPoint` in Sub0Physics made GCC stop inlining the caller's helper (one more call level): clearance +60%, invisible in Sub0Math's own benchmark | Consumer budget gate; `nm` showed an out-of-line `.isra` clone | `SUB0MATH_FORCE_INLINE` (`config.hpp`) on small functions that sit in callers' inner loops; clearance back to 414 ns |
 | 2026-10-15 | Defaulted `<=>` on quantities goes through `std::partial_ordering` | Reasoning; no measurable change here | Direct relational operators on the stored value, kept for predictable codegen |
+| 2026-10-16 | `abs` on quantities was `q < 0 ? -q : q`. GCC cannot turn that into the sign-clearing instruction (it differs from `fabs` for -0 and NaN), so it branched | Box-against-blocks pair: 2.7 to 2.0 µs after the change | `abs(Quantity)` uses `std::abs` on the stored value; this affects every quantity user |
+| 2026-10-16 | A general box-against-box separating-axis test, called once per block, recomputes the box's rotation terms per block and loses to a hand-written loop that rejects most blocks after one comparison. Vectorising the branch-free form did not help: early rejection wins when most candidates miss | Vectorisation report: our loop vectorised, the faster hand-written one did not | `AabbOverlapTester`: box terms computed once at construction; coordinate axes tested first, with early exit |
+| 2026-10-16 | Passing blocks as `Aabb` corners costs about 30% against the hand-written reference, which takes centres from the grid index | Box-against-blocks pair | API changed: `AabbOverlapTester::overlapsCentred(centre, half)` for grid walks; the remaining gap is under Open gaps |
 
 ## Measured (development host, GCC 16, -O3)
 
@@ -101,6 +116,18 @@ Rules for math code:
 | quaternion rotate, double / float | 2061 / 1084 |
 | Mat4 * Vec4, double / float | 1251 / 823 |
 | segment distance^2, hand-written scalars / Point2<f64::Length> | 1561 / 1565 |
+| triangle closest point, hand-written scalars / Triangle<f64::Length> (1024 triangles) | 3021 / 3140; parity within noise across runs |
+| ray vs triangles, hand-written Moller-Trumbore / Ray<f64::Length> (1024 triangles) | 2966 / 2860; parity |
+| box vs 1024 blocks: hand-written (centres from index) / tester (centre, half) / tester (Aabb corners) | 921 / 1022 / 1309 |
 
 Timings vary by a few percent run to run on a shared desktop; compare pairs measured together, and use
 best-of-N when judging a change.
+
+## Open gaps
+
+Deficiencies against the hand-written reference, kept until closed or accepted with a reason.
+
+| Since | Pair | Gap | Cause | Follow-up |
+|---|---|---|---|---|
+| 2026-10-16 | box vs 1024 blocks, `AabbOverlapTester::overlapsCentred` | about 1.1× (921 vs 1022 ns) | The box-face radius `sum(half[j] * |r[i][j]|)` is recomputed per block. The hand-written loop folds it once, because every block has the same half size | When Sub0Physics' coverage rasterisation (terrain step G2) is profiled: a tester prepared for a uniform block size (radii precomputed), or a grid walk that steps centres incrementally. Close it or accept it, with the consumer's numbers |
+| 2026-10-16 | box vs 1024 blocks, `AabbOverlapTester(Aabb)` | about 1.4× | Deriving centre and half from corners per block | By design: use `overlapsCentred` on regular grids; the `Aabb` form is for irregular boxes |

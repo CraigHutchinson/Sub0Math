@@ -35,6 +35,16 @@ Doxygen `/** */` on every public declaration; the first sentence is the brief (n
 `@param`, `@return` and `@tparam` throughout. `///<` for data members. State units (SI) and sign
 conventions on every physical quantity.
 
+## Performance notes in code
+
+Where performance has been measured and iterated, leave a `// PERF:` comment at the code, ten words or
+fewer, saying what was found faster than what: `// PERF: std::abs faster than compare-and-negate, which
+branched.` The detail (numbers, benchmark, date) goes in `docs/PERFORMANCE.md` under Findings.
+
+PERF notes are hints, not rules. They record that this code has already been worked on, so the next
+person measures before changing it. Later work may override a note when its own measurement says so,
+and then updates the note.
+
 ## Math types
 
 - Value types are aggregates or have constexpr, noexcept members; static assertions pin size and

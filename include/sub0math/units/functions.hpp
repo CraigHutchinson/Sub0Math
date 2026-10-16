@@ -18,7 +18,8 @@ namespace sub0math
 template<typename D, Real Rep>
 [[nodiscard]] constexpr Quantity<D, Rep> abs(const Quantity<D, Rep>& q) noexcept
 {
-    return q < Quantity<D, Rep>{} ? -q : q;
+    // PERF: std::abs faster than compare-and-negate, which branched.
+    return Quantity<D, Rep>::fromSi(std::abs(q.si()));
 }
 
 /**

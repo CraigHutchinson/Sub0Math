@@ -227,8 +227,7 @@ template<typename T, std::size_t N, typename Q>
 template<typename A, typename B, std::size_t N>
 [[nodiscard]] constexpr ProductType<A, B> dot(const Vec<A, N>& a, const Vec<B, N>& b) noexcept
 {
-    // Start from the first product: under IEEE rules 0.0 + x cannot be folded away (signed zero), so a
-    // zero-initialised sum would cost an extra addition on every call.
+    // PERF: first-product start faster than zero-initialised sum (IEEE).
     ProductType<A, B> sum = a.template get<0>() * b.template get<0>();
     detail::forEachComponent<N - 1>([&](auto i) {
         sum += a.template get<i + 1>() * b.template get<i + 1>();

@@ -71,9 +71,25 @@ using RetryCount = sub0math::Role<struct RetryCountTag, std::uint32_t>;
 
 ## Shapes
 
-Shapes are values in their own frame, generic over the coordinate type: `Sphere<T, N>` (`Circle<T>`),
-`Segment<T, N>` with `closestPoint`, and `Aabb<T, N>`, each with `boundingBox` where it applies. They are
-added when a consumer needs them, and the API is refined by using it (ADR 0002). Converting a shape to
+Shapes are values in their own frame, generic over the coordinate type. They are added when a consumer
+needs them, and the API is refined by using it (ADR 0002).
+
+| Shape | Queries | First consumer |
+|---|---|---|
+| `Sphere<T, N>` (`Circle<T>`) | `contains`, `boundingBox` | Terrain clearance probe |
+| `Segment<T, N>` | `closestPoint` (with exact end parameters), `boundingBox` | Terrain clearance probe |
+| `Aabb<T, N>` | `contains`, `intersects`, `including` | Bounds everywhere |
+| `OrientedBox<T, N>` | `closestPoint`, `contains`, `boundingBox`, `overlaps` with boxes (separating axes, 2D and 3D); `AabbOverlapTester` for one box against many blocks | Terrain corridor sweep boxes and coverage blocks |
+| `Capsule<T, N>` | `signedDistance`, `contains`, `boundingBox` | Wheel interaction envelope |
+| `Plane<T, N>` | `signedDistance`, `closestPoint`, `Plane::through` | Ground and ramp references |
+| `Triangle<T, N>` | `closestPoint` reporting the vertex, edge or face it lies on; `normal`; `boundingBox` | Exact terrain height queries |
+| `Ray<T, N>` | `intersect` with `Triangle` (Moller–Trumbore) and `Plane` | Rays along a wheel's support normal |
+| `RegularGrid<T, N>` | `nodeAt`, `cellOf`, `cellsOverlapping` | Terrain pages and coverage blocks |
+
+Directions (`Plane::normal`, `Ray::direction`, box axes) are plain unit vectors; only positions and
+extents carry the coordinate unit, so a length can never be passed as a direction. The shapes added on
+2026-10-16 serve the terrain plan's groundwork (steps G1–G3), whose needs were measured first by the D0
+experiment. Converting a shape to
 triangles will be a function (`toMesh(shape, ...)`), not a type. Purposes that carry their own data
 (collision materials, render materials) belong to the layer that owns that data.
 
