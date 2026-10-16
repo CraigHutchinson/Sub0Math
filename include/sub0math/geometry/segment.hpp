@@ -43,29 +43,27 @@ struct SegmentPoint
 /**
  * Finds the point of a segment nearest to a query point.
  *
- * `t` is clamped to [0, 1], so a result at an end is exactly 0 or 1 and identifies a vertex. A
- * zero-length segment is a point: the result is `a` with t = 0.
+ * `t` is clamped to [0, 1], so a result at an end is exactly 0 or 1 and identifies a vertex.
  *
- * @param segment The segment.
+ * @param segment A segment of non-zero length. Callers that can meet a point (a degenerate capsule)
+ *        handle it themselves, so this hot query carries no check for it.
  * @param p The query point.
  * @return The nearest point and its parameter.
  */
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(push)
-// C4723 "potential divide by 0": after constant folding a zero-length segment, MSVC reports the division
-// on the branch the length guard has already excluded. A false positive; the guard is the behaviour.
+// C4723 "potential divide by 0": MSVC reports it after constant-folding a zero-length segment into a
+// branch its caller has already excluded (a degenerate Capsule). A false positive.
 #pragma warning(disable : 4723)
 #endif
 // PERF: force-inlined; GCC outlining callers' loops cost 60%.
+// PERF: no zero-length check: branch 1.5x, max 1.06x slower.
 template<typename T, std::size_t N>
 [[nodiscard]] SUB0MATH_FORCE_INLINE constexpr SegmentPoint<T, N> closestPoint(const Segment<T, N>& segment, const Point<T, N>& p) noexcept
 {
     using Scalar = ScalarOf<T>;
     const Vec<T, N> ab = segment.b - segment.a;
-    const auto length2 = dot(ab, ab);
-    // PERF: zero-length guard measured within noise (predictable branch).
-    if (!(length2 > decltype(length2){})) return {segment.a, Scalar{0}};
-    const Scalar t = std::clamp(static_cast<Scalar>(dot(p - segment.a, ab) / length2), Scalar{0}, Scalar{1});
+    const Scalar t = std::clamp(static_cast<Scalar>(dot(p - segment.a, ab) / dot(ab, ab)), Scalar{0}, Scalar{1});
     return {segment.a + ab * t, t};
 }
 

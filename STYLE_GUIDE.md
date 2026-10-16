@@ -41,6 +41,10 @@ Where performance has been measured and iterated, leave a `// PERF:` comment at 
 fewer, saying what was found faster than what: `// PERF: std::abs faster than compare-and-negate, which
 branched.` The detail (numbers, benchmark, date) goes in `docs/PERFORMANCE.md` under Findings.
 
+Hot-path queries return a plain aggregate with a status (a value and `known`, with an explicit
+`operator bool`) rather than `std::optional`: on GCC 16 the optional kept results in memory and cost
+1.7x in a terrain lookup. Use `std::optional` where the call is not in an inner loop.
+
 PERF notes are hints, not rules. They record that this code has already been worked on, so the next
 person measures before changing it. Later work may override a note when its own measurement says so,
 and then updates the note.

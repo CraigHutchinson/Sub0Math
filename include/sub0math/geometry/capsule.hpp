@@ -19,7 +19,7 @@ namespace sub0math
 template<typename T, std::size_t N>
 struct Capsule
 {
-    Segment<T, N> axis; ///< Core segment; may have zero length (then it is a sphere).
+    Segment<T, N> axis; ///< Core segment; may have zero length (then it is a sphere), handled here.
     T radius;           ///< Radius; not negative.
 
     friend constexpr bool operator==(const Capsule&, const Capsule&) = default;
@@ -35,7 +35,8 @@ struct Capsule
 template<typename T, std::size_t N>
 [[nodiscard]] T signedDistance(const Capsule<T, N>& capsule, const Point<T, N>& p) noexcept
 {
-    return length(p - closestPoint(capsule.axis, p).point) - capsule.radius;
+    const Point<T, N> nearest = capsule.axis.a == capsule.axis.b ? capsule.axis.a : closestPoint(capsule.axis, p).point;
+    return length(p - nearest) - capsule.radius;
 }
 
 /**
@@ -48,7 +49,8 @@ template<typename T, std::size_t N>
 template<typename T, std::size_t N>
 [[nodiscard]] constexpr bool contains(const Capsule<T, N>& capsule, const Point<T, N>& p) noexcept
 {
-    return lengthSquared(p - closestPoint(capsule.axis, p).point) <= capsule.radius * capsule.radius;
+    const Point<T, N> nearest = capsule.axis.a == capsule.axis.b ? capsule.axis.a : closestPoint(capsule.axis, p).point;
+    return lengthSquared(p - nearest) <= capsule.radius * capsule.radius;
 }
 
 /**
