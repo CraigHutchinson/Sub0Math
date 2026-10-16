@@ -50,6 +50,12 @@ struct SegmentPoint
  * @param p The query point.
  * @return The nearest point and its parameter.
  */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+// C4723 "potential divide by 0": after constant folding a zero-length segment, MSVC reports the division
+// on the branch the length guard has already excluded. A false positive; the guard is the behaviour.
+#pragma warning(disable : 4723)
+#endif
 // PERF: force-inlined; GCC outlining callers' loops cost 60%.
 template<typename T, std::size_t N>
 [[nodiscard]] SUB0MATH_FORCE_INLINE constexpr SegmentPoint<T, N> closestPoint(const Segment<T, N>& segment, const Point<T, N>& p) noexcept
@@ -62,6 +68,10 @@ template<typename T, std::size_t N>
     const Scalar t = std::clamp(static_cast<Scalar>(dot(p - segment.a, ab) / length2), Scalar{0}, Scalar{1});
     return {segment.a + ab * t, t};
 }
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 /**
  * Computes the smallest axis-aligned box around a segment.
