@@ -3,130 +3,139 @@
   "host": "CrogLegion",
   "machine": "AMD64",
   "system": "Windows 11",
-  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit.",
-  "calibration_ns": 4794.73,
+  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
+  "calibration_ns": 4827.202,
+  "epochs": 0,
   "benchmarks": {
     "Mat4 * Vec4, double": {
-      "median_ns": 1324.345,
-      "cv": 0.0168,
+      "median_ns": 1336.504,
+      "cv": 0.0202,
       "rounds": 5
     },
     "Mat4 * Vec4, float": {
-      "median_ns": 895.914,
-      "cv": 0.0023,
+      "median_ns": 910.293,
+      "cv": 0.0107,
       "rounds": 5
     },
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
-      "median_ns": 1748.392,
-      "cv": 0.0145,
+      "median_ns": 1685.37,
+      "cv": 0.0207,
       "rounds": 5
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
-      "median_ns": 1327.364,
-      "cv": 0.0173,
+      "median_ns": 1316.902,
+      "cv": 0.0316,
       "rounds": 5
     },
     "box vs 1024 blocks, hand-written 2D SAT": {
-      "median_ns": 1392.188,
-      "cv": 0.0171,
+      "median_ns": 1189.864,
+      "cv": 0.0128,
       "rounds": 5
     },
     "dot, double": {
-      "median_ns": 689.915,
-      "cv": 0.0156,
+      "median_ns": 696.042,
+      "cv": 0.0131,
       "rounds": 5
     },
     "dot, f32::Length": {
-      "median_ns": 662.775,
-      "cv": 0.003,
-      "rounds": 5
-    },
-    "dot, f64::Length": {
-      "median_ns": 680.856,
-      "cv": 0.0063,
-      "rounds": 5
-    },
-    "dot, float": {
-      "median_ns": 666.335,
-      "cv": 0.0208,
-      "rounds": 5
-    },
-    "quaternion rotate, double": {
-      "median_ns": 2207.538,
-      "cv": 0.018,
-      "rounds": 5
-    },
-    "quaternion rotate, float": {
-      "median_ns": 1105.152,
-      "cv": 0.0077,
-      "rounds": 5
-    },
-    "ray vs triangles, hand-written Moller-Trumbore": {
-      "median_ns": 4021.778,
-      "cv": 0.0017,
-      "rounds": 5
-    },
-    "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
-      "median_ns": 3948.903,
-      "cv": 0.0156,
-      "rounds": 5
-    },
-    "segment distance^2, closestPoint(Segment<f64::Length>)": {
-      "median_ns": 1918.645,
-      "cv": 0.0124,
-      "rounds": 5
-    },
-    "segment distance^2, hand-written scalars": {
-      "median_ns": 1916.827,
-      "cv": 0.0094,
-      "rounds": 5
-    },
-    "triangle closest point, closestPoint(Triangle<f64::Length>)": {
-      "median_ns": 4459.01,
+      "median_ns": 681.543,
       "cv": 0.0178,
       "rounds": 5
     },
+    "dot, f64::Length": {
+      "median_ns": 704.182,
+      "cv": 0.0082,
+      "rounds": 5
+    },
+    "dot, float": {
+      "median_ns": 683.618,
+      "cv": 0.0091,
+      "rounds": 5
+    },
+    "quaternion rotate, double": {
+      "median_ns": 2211.808,
+      "cv": 0.0146,
+      "rounds": 5
+    },
+    "quaternion rotate, float": {
+      "median_ns": 1126.418,
+      "cv": 0.0095,
+      "rounds": 5
+    },
+    "ray vs triangles, hand-written Moller-Trumbore": {
+      "median_ns": 3968.815,
+      "cv": 0.0318,
+      "rounds": 5
+    },
+    "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
+      "median_ns": 3837.654,
+      "cv": 0.0147,
+      "rounds": 5
+    },
+    "segment distance^2, closestPoint(Segment<f64::Length>)": {
+      "median_ns": 1943.729,
+      "cv": 0.0049,
+      "rounds": 5
+    },
+    "segment distance^2, hand-written scalars": {
+      "median_ns": 1945.955,
+      "cv": 0.0089,
+      "rounds": 5
+    },
+    "triangle closest point, closestPoint(Triangle<f64::Length>)": {
+      "median_ns": 4365.676,
+      "cv": 0.0108,
+      "rounds": 5
+    },
     "triangle closest point, hand-written scalars": {
-      "median_ns": 4426.225,
-      "cv": 0.0338,
+      "median_ns": 4370.763,
+      "cv": 0.0199,
       "rounds": 5
     },
     "x += v*dt, double": {
-      "median_ns": 382.853,
-      "cv": 0.0217,
+      "median_ns": 372.641,
+      "cv": 0.0024,
       "rounds": 5
     },
     "x += v*dt, f64::Length": {
-      "median_ns": 375.655,
-      "cv": 0.0223,
+      "median_ns": 379.033,
+      "cv": 0.0137,
       "rounds": 5
     },
     "x += v*dt, float": {
-      "median_ns": 184.563,
-      "cv": 0.0147,
+      "median_ns": 175.967,
+      "cv": 0.0277,
       "rounds": 5
     }
   },
   "pairs": {
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 1.2461
+      "ratio": 1.3957
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 0.9536
+      "ratio": 1.082
     },
     "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
       "reference": "ray vs triangles, hand-written Moller-Trumbore",
-      "ratio": 0.9809
+      "ratio": 0.9693
     },
     "segment distance^2, closestPoint(Segment<f64::Length>)": {
       "reference": "segment distance^2, hand-written scalars",
-      "ratio": 1.0066
+      "ratio": 0.9998
     },
     "triangle closest point, closestPoint(Triangle<f64::Length>)": {
       "reference": "triangle closest point, hand-written scalars",
-      "ratio": 1.0074
+      "ratio": 1.002
     }
-  }
+  },
+  "accepted": [
+    {
+      "date": "2026-10-16",
+      "commit": "f0987788f1b84d3696adc34da3554d8fc75948c6",
+      "reason": "nanobench 4.3.11 -> 4.6.0: the harness change makes the hand-written box reference ~11% faster (A/B'd both ways); every benchmark re-measured under the new harness",
+      "benchmarks": "all (re-recorded)"
+    }
+  ]
 }
