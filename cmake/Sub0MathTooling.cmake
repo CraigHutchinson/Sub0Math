@@ -7,7 +7,9 @@
 #         <target>_json             run it once and write build/perf/<target>.json (nanobench format)
 #         <target>_runs             SUB0MATH_BENCH_REPEATS interleaved, calibrated rounds -> <target>.samples.json
 #         <target>_check            judge those rounds against perf/baselines/<host>.json; fails on a regression
-#         <target>_baseline         record perf/baselines/<host>.json from the same rounds
+#         <target>_baseline         record perf/baselines/<host>.json from the same rounds (needs a reason once
+#                                   a baseline exists: bench_check.py baseline --reason ...)
+#       and installs the pre-push gate and post-checkout hooks (SUB0MATH_PERF_GIT_HOOKS, off on CI),
 #       and, unless SUB0MATH_PERF_ON_BUILD is OFF, a quick check after every rebuild of <target>
 #       (its code or a header it uses changed), reporting regressions and progressions implicitly.
 #         <target>_vtune_hotspots   VTune hotspots      (SUB0MATH_PROFILE_FILTER, _SECONDS)
@@ -33,6 +35,13 @@ set(SUB0MATH_PERF_ON_BUILD "REPORT" CACHE STRING
 set_property(CACHE SUB0MATH_PERF_ON_BUILD PROPERTY STRINGS OFF REPORT ENFORCE)
 set(SUB0MATH_PERF_QUICK_ROUNDS "3" CACHE STRING "Rounds for the after-build check (noisy benchmarks get up to twice as many)")
 set(SUB0MATH_PERF_QUICK_EPOCHS "5" CACHE STRING "nanobench epochs per measurement in the after-build check")
+if(DEFINED ENV{CI})
+    set(_sub0math_hooks_default OFF)
+else()
+    set(_sub0math_hooks_default ON)
+endif()
+option(SUB0MATH_PERF_GIT_HOOKS "Install the pre-push performance gate and post-checkout note in this repository's git hooks"
+       ${_sub0math_hooks_default})
 
 # Where the scripts are, for shells and CI: `python "$(cat build/sub0math_tooling_dir.txt)/profile.py" ...`.
 # CPM may place Sub0Math anywhere, so consumers should not hard-code the path.
@@ -109,7 +118,27 @@ function(sub0math_add_benchmark target)
             COMMAND ${Python3_EXECUTABLE} "${check}" auto --exe $<TARGET_FILE:${target}> --baseline "${baseline}"
                     --rounds ${SUB0MATH_PERF_QUICK_ROUNDS} --epochs ${SUB0MATH_PERF_QUICK_EPOCHS}
                     --out "${CMAKE_BINARY_DIR}/perf/${target}.quick.json" ${mode_args}
+                    --record --target ${target} --repo "${PROJECT_SOURCE_DIR}"
             VERBATIM)
+    endif()
+
+    # Pre-push gate: blocks a push whose benchmarks regressed against the committed baseline or the
+    # local record of the commit it started from, unless the regression was accepted (bench_check.py accept).
+    if(SUB0MATH_PERF_GIT_HOOKS AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+        if(CMAKE_CONFIGURATION_TYPES)
+            set(hook_config Release)
+            set(hook_exe "${CMAKE_CURRENT_BINARY_DIR}/Release/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+        else()
+            set(hook_config "")
+            set(hook_exe "${CMAKE_CURRENT_BINARY_DIR}/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+        endif()
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} "${check}" install-hooks --repo "${PROJECT_SOURCE_DIR}" --build-dir "${CMAKE_BINARY_DIR}"
+                    --target ${target} --exe "${hook_exe}" --baseline "${baseline}" --config "${hook_config}"
+            RESULT_VARIABLE hook_result)
+        if(NOT hook_result EQUAL 0)
+            message(WARNING "sub0perf: installing the git hooks failed (${hook_result})")
+        endif()
     endif()
 
     foreach(analysis vtune-hotspots vtune-uarch advisor-roofline perf-record)

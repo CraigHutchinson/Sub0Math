@@ -5,7 +5,10 @@ noise, and paired comparisons with hand-written references.
   bench_check.py run      --exe BENCH --out samples.json [--rounds 5] [--epochs N] [--filter TEXT]
   bench_check.py check    --results samples.json --baseline perf/baselines/<host>.json
   bench_check.py baseline --results samples.json --baseline perf/baselines/<host>.json
-  bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only]
+  bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
+  bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
+  bench_check.py gate     [--repo DIR]                       (the pre-push hook; reads .git/sub0perf/config.json)
+  bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH
 
 How a run is made robust (`run`, and `auto` which runs then checks):
 
@@ -30,6 +33,16 @@ Verdicts: REGRESSED (slower, significant), IMPROVED (faster, significant: a prog
 fastest-known reference, never weakened), each other member's time is divided by the reference's in the
 same round. That ratio is nearly independent of the host, so it is reported even with no baseline, and
 compared with the baseline's ratio when there is one.
+
+Local records and the pre-push gate. Every measurement of a clean working tree (the after-build check
+with --record, and the gate) is kept as `.git/sub0perf/records/<target>/<commit>.json`, so the state a
+branch was checked out at and the state about to be pushed are both on record, measured on this
+machine. The pre-push hook (`gate`) builds each configured benchmark, measures HEAD, and blocks the
+push on a regression against the committed baseline, or against the nearest earlier commit with a
+local record (like for like: same machine, same session conditions), unless the regression has been
+accepted. Accepting is explicit: `accept` moves the named benchmarks' baseline to the new measurement
+and appends an entry (date, commit, reason, before and after) to the baseline's `accepted` log; commit
+that file with the change. `git push --no-verify` bypasses the hook, as with any git hook.
 
 `check` and `auto` exit 1 on any regression unless --report-only. With GITHUB_STEP_SUMMARY set, the
 report is appended to the job summary. Baselines from the earlier format (a number per benchmark) are
@@ -245,27 +258,90 @@ def pair_ratios(stats):
 # ── Baselines and judging ───────────────────────────────────────────────────────────────────────────
 
 def load_baseline(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return baseline_tuple(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def baseline_tuple(data):
     benchmarks = {}
     for name, v in data.get("benchmarks", {}).items():
         benchmarks[name] = v if isinstance(v, dict) else {"median_ns": v, "cv": None}
     return benchmarks, data.get("calibration_ns"), data.get("pairs", {})
 
 
+def baseline_data(record):
+    """A format-2 baseline object built from a samples record."""
+    stats, cal, _, _ = summarise(record)
+    pairs = pair_ratios(stats)
+    return {"format": 2, "host": record.get("host", platform.node()), "machine": record.get("machine", platform.machine()),
+            "system": record.get("system", f"{platform.system()} {platform.release()}"),
+            "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
+                    "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
+            "calibration_ns": round(cal, 3),
+            "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"]}
+                           for n, s in sorted(stats.items())},
+            "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4)} for n, p in sorted(pairs.items())},
+            "accepted": []}
+
+
+def write_baseline(path, data):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
 def baseline_command(args):
     record = json.loads(Path(args.results).read_text(encoding="utf-8"))
-    stats, cal, cal_cv, _ = summarise(record)
-    pairs = pair_ratios(stats)
-    out = {"format": 2, "host": record["host"], "machine": record["machine"], "system": record["system"],
-           "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
-                   "Regenerate deliberately; say why in the commit.",
-           "calibration_ns": round(cal, 3),
-           "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"]}
-                          for n, s in sorted(stats.items())},
-           "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4)} for n, p in sorted(pairs.items())}}
-    Path(args.baseline).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.baseline).write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8", newline="\n")
-    print(f"wrote {len(stats)} benchmarks and {len(pairs)} pairs to {args.baseline}")
+    data = baseline_data(record)
+    path = Path(args.baseline)
+    if path.is_file():
+        old = json.loads(path.read_text(encoding="utf-8"))
+        if not args.reason:
+            print("bench_check: a baseline exists; re-recording it needs --reason (it is logged in the file)")
+            return 2
+        data["accepted"] = old.get("accepted", []) + [{
+            "date": time.strftime("%Y-%m-%d"), "commit": git_head(Path(args.baseline).parent) or "",
+            "reason": args.reason, "benchmarks": "all (re-recorded)"}]
+    write_baseline(path, data)
+    print(f"wrote {len(data['benchmarks'])} benchmarks and {len(data['pairs'])} pairs to {args.baseline}")
+    return 0
+
+
+def accept_command(args):
+    """Moves the named (or every changed) benchmark's baseline to the measured value, with a logged reason."""
+    record = json.loads(Path(args.results).read_text(encoding="utf-8"))
+    fresh = baseline_data(record)
+    path = Path(args.baseline)
+    data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else baseline_data(record)
+    if not isinstance(next(iter(data.get("benchmarks", {}).values()), {}), dict):
+        print("bench_check: the baseline is in the old format; re-record it with `baseline --reason ...` first")
+        return 2
+    if args.all_changed:
+        rows, pair_rows, _ = evaluate(record, path, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute)
+        names = [r[0] for r in rows if r[5] in ("REGRESSED", "IMPROVED")] + [p[0] for p in pair_rows if p[4] in ("REGRESSED", "IMPROVED")]
+    else:
+        names = args.benchmark
+    unknown = [n for n in names if n not in fresh["benchmarks"]]
+    if unknown or not names:
+        print(f"bench_check: nothing to accept{'; not measured: ' + ', '.join(unknown) if unknown else ''}")
+        return 2
+    scale = (data.get("calibration_ns") or fresh["calibration_ns"]) / fresh["calibration_ns"]
+    changes = {}
+    for n in names:
+        new = dict(fresh["benchmarks"][n])
+        new["median_ns"] = round(new["median_ns"] * scale, 3)  # expressed at the baseline's clock
+        old = data["benchmarks"].get(n, {}).get("median_ns")
+        changes[n] = {"from_ns": old, "to_ns": new["median_ns"],
+                      "change": None if not old else round(new["median_ns"] / old - 1.0, 4)}
+        data["benchmarks"][n] = new
+        if n in fresh["pairs"]:
+            changes[n]["pair_ratio"] = {"from": data.get("pairs", {}).get(n, {}).get("ratio"), "to": fresh["pairs"][n]["ratio"]}
+            data.setdefault("pairs", {})[n] = fresh["pairs"][n]
+    data.setdefault("accepted", []).append({"date": time.strftime("%Y-%m-%d"), "commit": git_head(path.parent) or "",
+                                            "reason": args.reason, "benchmarks": changes})
+    write_baseline(path, data)
+    for n, c in changes.items():
+        delta = "new" if c["change"] is None else f"{c['change']:+.1%}"
+        print(f"accepted {n}: {delta}")
+    print(f"logged in {path}; commit it with the change, and say why")
     return 0
 
 
@@ -283,8 +359,12 @@ def judge(change, noise, tolerance, cv, max_cv):
 def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute, filtered=False):
     stats, cal, cal_cv, cal_drift = summarise(record)
     pairs = pair_ratios(stats)
-    have_baseline = Path(baseline_path).is_file()
-    base, base_cal, base_pairs = load_baseline(baseline_path) if have_baseline else ({}, None, {})
+    if isinstance(baseline_path, dict):
+        have_baseline = True
+        base, base_cal, base_pairs = baseline_tuple(baseline_path)
+    else:
+        have_baseline = Path(baseline_path).is_file()
+        base, base_cal, base_pairs = load_baseline(baseline_path) if have_baseline else ({}, None, {})
 
     common = [n for n in stats if n in base]
     if absolute:
@@ -394,6 +474,8 @@ def check_command(args):
 
 
 def auto_command(args):
+    if os.environ.get("SUB0MATH_PERF_SKIP"):
+        return 0  # the gate builds benchmarks itself and measures them once
     names = list_names(args.exe, args.filter)
     samples, meta, positions = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
     record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(args.exe).name}
@@ -416,13 +498,199 @@ def auto_command(args):
                 positions[n].append(0.5)
     if args.out:
         write_samples(args.out, args.exe, samples, meta, positions)
+    if args.record and args.target:
+        save_record(Path(args.repo or "."), args.target, record, only_if_missing=True)
     _, _, regressed = report(record, args)
     return 0 if args.report_only or not regressed else 1
 
 
+# ── Git: local records and the pre-push gate ───────────────────────────────────────────────────────
+
+def git(repo, *args):
+    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git_head(repo):
+    return git(repo, "rev-parse", "HEAD")
+
+
+def tree_clean(repo):
+    """True when no tracked file differs from HEAD (untracked files do not change what is built)."""
+    return git(repo, "status", "--porcelain", "--untracked-files=no") == ""
+
+
+def perf_dir(repo):
+    common = git(repo, "rev-parse", "--git-common-dir")
+    if common is None:
+        return None
+    base = Path(common) if Path(common).is_absolute() else Path(repo) / common
+    return base / "sub0perf"
+
+
+def log_event(repo, event):
+    d = perf_dir(repo)
+    if d is None:
+        return
+    d.mkdir(parents=True, exist_ok=True)
+    event = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), **event}
+    with open(d / "log.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(event) + "\n")
+
+
+def save_record(repo, target, record, only_if_missing=False):
+    """Keeps a clean tree's measurement as the record for its commit."""
+    d = perf_dir(repo)
+    head = git_head(repo)
+    if d is None or head is None or not tree_clean(repo):
+        return None
+    path = d / "records" / target / f"{head}.json"
+    if only_if_missing and path.is_file():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**record, "commit": head}, indent=1) + "\n", encoding="utf-8", newline="\n")
+    log_event(repo, {"event": "record", "target": target, "commit": head})
+    return path
+
+
+def reference_record(repo, target, upstream=None, limit=200):
+    """The record of the nearest earlier commit (the upstream first, when it has one)."""
+    d = perf_dir(repo)
+    if d is None:
+        return None, None
+    records = d / "records" / target
+    candidates = ([upstream] if upstream else []) + (git(repo, "rev-list", f"--max-count={limit}", "HEAD~1") or "").split()
+    for sha in candidates:
+        if sha and (records / f"{sha}.json").is_file():
+            return sha, json.loads((records / f"{sha}.json").read_text(encoding="utf-8"))
+    return None, None
+
+
+def accepted_since(repo, baseline_rel, reference_sha):
+    """Benchmarks with an acceptance in HEAD's baseline that the reference commit's baseline lacks."""
+    def entries(text):
+        if not text:
+            return []
+        return json.loads(text).get("accepted", [])
+    now = entries(Path(repo, baseline_rel).read_text(encoding="utf-8") if Path(repo, baseline_rel).is_file() else "")
+    before = entries(git(repo, "show", f"{reference_sha}:{baseline_rel}") if reference_sha else "")
+    names = set()
+    for e in now[len(before):]:
+        if isinstance(e.get("benchmarks"), dict):
+            names |= set(e["benchmarks"])
+        else:
+            names.add("*")
+    return names
+
+
+def gate_command(args):
+    repo = Path(args.repo or git(".", "rev-parse", "--show-toplevel") or ".")
+    d = perf_dir(repo)
+    config_path = d / "config.json" if d else None
+    if not config_path or not config_path.is_file():
+        print("sub0perf: no benchmarks configured for this repository; nothing to gate")
+        return 0
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    head = git_head(repo)
+    clean = tree_clean(repo)
+    upstream = git(repo, "rev-parse", "@{upstream}")
+    blocked = []
+    for target, t in config.get("targets", {}).items():
+        print(f"sub0perf: pre-push gate for {target} at {head[:9]}{'' if clean else ' (working tree has uncommitted changes)'}")
+        command = ["cmake", "--build", t["build_dir"], "--target", target] + (["--config", t["config"]] if t.get("config") else [])
+        build = subprocess.run(command, env={**os.environ, "SUB0MATH_PERF_SKIP": "1"})
+        if build.returncode != 0:
+            print(f"sub0perf: building {target} failed; push blocked")
+            blocked.append(target)
+            continue
+        exe = t["exe"]
+        names = list_names(exe, "")
+        samples, meta, positions = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
+        record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(exe).name,
+                  "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
+        save_record(repo, target, record)  # the record before push
+        args.baseline = t["baseline"]
+        print("\n### Against the committed baseline\n")
+        rows, pair_rows, regressed_base = report(record, args)
+        ref_sha, ref = reference_record(repo, target, upstream)
+        regressed_ref = []
+        if ref:
+            print(f"\n### Against the local record of {ref_sha[:9]} (like for like on this machine)\n")
+            ref_rows, ref_pairs, env = evaluate(record, baseline_data(ref), args.tolerance, args.pair_tolerance, args.max_cv, args.absolute)
+            print(render(ref_rows, ref_pairs, env, f"record {ref_sha[:9]}", args.tolerance, args.pair_tolerance))
+            regressed_ref = [r[0] for r in ref_rows if r[5] == "REGRESSED"] + [p[0] for p in ref_pairs if p[4] == "REGRESSED"]
+        else:
+            print("\nsub0perf: no local record of an earlier commit; it is made by the first clean build after a checkout")
+        baseline_rel = os.path.relpath(t["baseline"], repo).replace("\\", "/")
+        accepted = accepted_since(repo, baseline_rel, ref_sha)
+        unaccepted = [n for n in regressed_ref if n not in accepted and "*" not in accepted]
+        if regressed_base or unaccepted:
+            blocked.append(target)
+            names_text = ", ".join(sorted(set(unaccepted) | {r[0] for r in rows if r[5] == "REGRESSED"}
+                                         | {p[0] for p in pair_rows if p[4] == "REGRESSED"}))
+            print(f"\nsub0perf: push blocked by regressions in {target}: {names_text}")
+            print("  Fix them, or accept them explicitly and commit the baseline:")
+            print(f'    python "{Path(__file__).resolve()}" accept --results "{d / "records" / target / (head + ".json")}"'
+                  f' --baseline "{t["baseline"]}" --all-changed --reason "why this is acceptable"')
+        log_event(repo, {"event": "gate", "target": target, "commit": head, "reference": ref_sha,
+                         "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted})
+    return 1 if blocked else 0
+
+
+HOOK_MARK = "# sub0perf hook"
+
+
+def install_hooks_command(args):
+    repo = Path(args.repo)
+    d = perf_dir(repo)
+    if d is None:
+        print(f"sub0perf: {repo} is not a git repository; hooks not installed")
+        return 0
+    d.mkdir(parents=True, exist_ok=True)
+    config_path = d / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {"targets": {}}
+    config["targets"][args.target] = {"build_dir": str(Path(args.build_dir).resolve()), "exe": str(Path(args.exe).resolve()),
+                                      "baseline": str(Path(args.baseline).resolve()), "config": args.config or ""}
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8", newline="\n")
+    hooks = Path(git(repo, "rev-parse", "--git-path", "hooks") or "")
+    if not hooks.is_absolute():
+        hooks = repo / hooks
+    hooks.mkdir(parents=True, exist_ok=True)
+    python = Path(sys.executable).as_posix()
+    script = Path(__file__).resolve().as_posix()
+    bodies = {
+        "pre-push": f'#!/bin/sh\n{HOOK_MARK}: performance regression gate (tools/perf/bench_check.py gate)\n'
+                    f'"{python}" "{script}" gate --repo "$(git rev-parse --show-toplevel)"\n',
+        "post-checkout": f'#!/bin/sh\n{HOOK_MARK}: notes the checkout; the first clean build records its measurement\n'
+                         f'[ "$3" = "1" ] && "{python}" "{script}" note-checkout --repo "$(git rev-parse --show-toplevel)"\nexit 0\n',
+    }
+    for name, body in bodies.items():
+        path = hooks / name
+        if path.is_file() and HOOK_MARK not in path.read_text(encoding="utf-8", errors="replace"):
+            print(f"sub0perf: {path} exists and is not ours; add this line to it yourself:\n  {body.splitlines()[2]}")
+            continue
+        path.write_text(body, encoding="utf-8", newline="\n")
+        try:
+            path.chmod(0o755)
+        except OSError:
+            pass
+    return 0
+
+
+def note_checkout_command(args):
+    repo = Path(args.repo or ".")
+    head = git_head(repo)
+    log_event(repo, {"event": "checkout", "commit": head})
+    d = perf_dir(repo)
+    have = d and any((d / "records").glob(f"*/{head}.json")) if d else False
+    if not have:
+        print(f"sub0perf: checked out {head[:9]}; its benchmark record is made by the first clean build")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["run", "check", "baseline", "auto"])
+    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout"])
     parser.add_argument("--exe", help="benchmark executable (run, auto)")
     parser.add_argument("--out", help="samples file to write (run; optional for auto)")
     parser.add_argument("--results", help="samples file from `run` (check, baseline)")
@@ -439,20 +707,39 @@ def main():
     parser.add_argument("--max-cv", type=float, default=0.05, help="spread above which a benchmark is inconclusive")
     parser.add_argument("--absolute", action="store_true", help="no calibration or drift correction")
     parser.add_argument("--report-only", action="store_true", help="never fail; report only")
+    parser.add_argument("--reason", help="why a baseline is re-recorded or a change accepted (logged in the file)")
+    parser.add_argument("--benchmark", nargs="+", default=[], help="accept: benchmarks to move to the new measurement")
+    parser.add_argument("--all-changed", action="store_true", help="accept: every regressed or improved benchmark")
+    parser.add_argument("--record", action="store_true", help="auto: keep a clean tree's measurement as its commit's record")
+    parser.add_argument("--repo", help="git repository (auto --record, gate, install-hooks)")
+    parser.add_argument("--target", help="benchmark target name (auto --record, install-hooks)")
+    parser.add_argument("--build-dir", help="install-hooks: build directory the gate builds in")
+    parser.add_argument("--config", help="install-hooks: build configuration for multi-config generators")
     parser.add_argument("--cpu", type=int, default=-1,
                         help="logical CPU to pin measurements to (default: the last one; -2 = do not pin)")
     args = parser.parse_args()
     if not args.max_rounds:
         args.max_rounds = args.rounds * 2
-    needs = {"run": ["exe", "out"], "check": ["results", "baseline"], "baseline": ["results", "baseline"], "auto": ["exe", "baseline"]}
-    missing = [f"--{k}" for k in needs[args.command] if not getattr(args, k)]
+    needs = {"run": ["exe", "out"], "check": ["results", "baseline"], "baseline": ["results", "baseline"], "auto": ["exe", "baseline"],
+             "accept": ["results", "baseline", "reason"], "gate": [], "install-hooks": ["repo", "build_dir", "target", "exe", "baseline"],
+             "note-checkout": []}
+    if args.command == "accept" and not args.reason:
+        args.reason = os.environ.get("SUB0MATH_PERF_REASON")
+    missing = [f"--{k.replace('_', '-')}" for k in needs[args.command] if not getattr(args, k)]
     if missing:
         parser.error(f"{args.command} needs {' '.join(missing)}")
     if args.exe:
         args.exe = str(Path(args.exe).resolve())
+    args.reason = args.reason or os.environ.get("SUB0MATH_PERF_REASON")  # lets build targets pass a reason
     global PIN_CPU
     PIN_CPU = None if args.cpu == -2 else ((os.cpu_count() or 1) - 1 if args.cpu == -1 else args.cpu)
-    return {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command}[args.command](args)
+    if args.command == "gate":
+        args.rounds = args.rounds if args.rounds != 5 else 3
+        args.epochs = args.epochs or 5
+    commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
+                "accept": accept_command, "gate": gate_command, "install-hooks": install_hooks_command,
+                "note-checkout": note_checkout_command}
+    return commands[args.command](args)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,37 @@ about 25 s here) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUIL
 `_baseline` and say why in the commit), ok, NOISY, new and missing, for benchmarks and for pair ratios
 (pair tolerance 5%).
 
+### Pre-push gate and explicit acceptance
+
+Configuring a repository that builds benchmarks installs two git hooks, unless on CI or
+`SUB0MATH_PERF_GIT_HOOKS=OFF`. Neither overwrites a hook that is not ours.
+
+- **post-checkout** notes the commit. The first clean build afterwards keeps its measurement as that
+  commit's record: `.git/sub0perf/records/<target>/<commit>.json`, local to the clone and never
+  committed. So every commit measured on a clean tree has a record of where a branch started.
+- **pre-push** builds each benchmark target, measures HEAD (3 interleaved rounds, plus extra rounds
+  for noisy benchmarks) and keeps that as HEAD's record. It then compares against:
+  - the committed baseline;
+  - the record of the upstream commit, or of the nearest earlier commit with one, which is like for
+    like on this machine.
+
+  Any regression blocks the push, with the exact command to accept it.
+
+A regression is accepted only explicitly, and only in the baseline you push:
+
+```bash
+python tools/perf/bench_check.py accept --results .git/sub0perf/records/<target>/<commit>.json     --baseline perf/baselines/<host>.json --benchmark "<name>" --reason "why this is acceptable"
+```
+
+This moves those benchmarks' baseline (and pair ratios) to the new measurement and appends an entry to
+the baseline's `accepted` log: date, commit, reason, before and after. Commit the file with the change.
+The gate then lets a regression through against the earlier record only if an acceptance for that
+benchmark was added since that commit. `--all-changed` accepts every regressed or improved benchmark.
+Re-recording a whole baseline also requires a reason once a baseline exists, and is logged the same
+way: `bench_check.py baseline --reason "..."`, or
+`SUB0MATH_PERF_REASON="..." cmake --build build --target <target>_baseline`. `git push --no-verify` bypasses the hook, as with
+any git hook; the baseline log is the record that should explain why.
+
 Baselines live in `perf/baselines/<host>.json`: median, spread and rounds per benchmark, calibration
 time, and pair ratios. Timings from one machine say nothing about another, so each host has its own.
 Baselines in the older format (a number per benchmark) are still read, judged against the suite's
