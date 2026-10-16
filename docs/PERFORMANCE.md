@@ -95,6 +95,52 @@ Rules for math code:
 - Prefer float where precision allows: it halves memory traffic and doubles SIMD width.
 - Structure-of-arrays layouts and explicit SIMD belong in the consumer's hot loops, not in the vocabulary.
 
+## Subnormal (denormal) numbers
+
+Values below the smallest normal float (about 1.2e-38; 2.2e-308 for double) are subnormal. On x86 most
+arithmetic on them takes a microcode assist.
+
+**Measured on the development host** (GCC 16, -O3): 4096 float damped oscillators stepped 2000 times.
+
+| Case | Time |
+|---|---|
+| Stays in the normal range | 1.0 ms |
+| Decays into the subnormal range | 105 ms (about 100×) |
+| The same, with flush-to-zero and denormals-are-zero (FTZ/DAZ) on | 1.1 ms |
+
+**Why it matters for physics.** Anything that decays toward zero produces subnormals: a settled
+suspension, the velocity of a resting body, an exponential filter, a contact force fading at separation,
+soil rebound. With float as the default, that floor is reached sooner than with double. The result is
+a sudden cost cliff in exactly the quiet scenes a real-time budget assumes are cheap.
+
+**Is flushing physically acceptable?** Yes. Every quantity we store is in SI, and 1e-38 m, N or m/s is
+far below any tolerance or measurement. The error introduced is negligible.
+
+**Caveats:**
+
+- **Per-thread processor state.** FTZ/DAZ live in MXCSR on x86 and FPCR on AArch64, per thread. Every
+  physics worker thread must set them. A library must never change them implicitly.
+- **Determinism.** Results differ between modes. The mode is part of a run's replay manifest, and is
+  the same on every thread and machine that must agree.
+- **Division.** A tiny nonzero denominator becomes zero, so the quotient becomes infinite. Code must
+  not divide by a value that can approach zero without a guard. That is already the rule, for example
+  no division by speed; Sub0Physics faults on non-finite state.
+- **`-ffast-math`.** GCC's `-ffast-math` turns FTZ on at start-up implicitly. We do not use it, so the
+  mode must be set explicitly.
+- **Other processors.** Many ARM cores handle subnormals at full speed. Measure on each target before
+  assuming either way.
+
+**Recommendation (for later).** Adopt FTZ/DAZ for physics threads in the application (PhantomFlow),
+set at thread start and recorded in the replay manifest. Sub0Math would then provide:
+
+- a scoped guard that saves, sets and restores the mode;
+- a query so Sub0Physics can assert the mode in debug builds;
+- an informational benchmark of this decay kernel, to watch for the cliff.
+
+Separately, models should still snap settled states to exact zero where that is their physics
+(sleeping bodies), rather than rely on the flush. The trigger is the PhantomFlow threading integration
+(terrain gap 17), or the first real-time run.
+
 ## Findings
 
 | Date | Finding | Evidence | Action |
@@ -105,6 +151,7 @@ Rules for math code:
 | 2026-10-15 | Defaulted `<=>` on quantities goes through `std::partial_ordering` | Reasoning; no measurable change here | Direct relational operators on the stored value, kept for predictable codegen |
 | 2026-10-16 | `abs` on quantities was `q < 0 ? -q : q`. GCC cannot turn that into the sign-clearing instruction (it differs from `fabs` for -0 and NaN), so it branched | Box-against-blocks pair: 2.7 to 2.0 µs after the change | `abs(Quantity)` uses `std::abs` on the stored value; this affects every quantity user |
 | 2026-10-16 | A general box-against-box separating-axis test, called once per block, recomputes the box's rotation terms per block and loses to a hand-written loop that rejects most blocks after one comparison. Vectorising the branch-free form did not help: early rejection wins when most candidates miss | Vectorisation report: our loop vectorised, the faster hand-written one did not | `AabbOverlapTester`: box terms computed once at construction; coordinate axes tested first, with early exit |
+| 2026-10-16 | Float decay into subnormals is about 100x slower; FTZ/DAZ restores normal speed | Scratch kernel on the development host (above) | Recorded for later adoption by the application; see Subnormal numbers |
 | 2026-10-16 | Passing blocks as `Aabb` corners costs about 30% against the hand-written reference, which takes centres from the grid index | Box-against-blocks pair | API changed: `AabbOverlapTester::overlapsCentred(centre, half)` for grid walks; the remaining gap is under Open gaps |
 
 ## Measured (development host, GCC 16, -O3)
