@@ -28,6 +28,14 @@ How a run is made robust (`run`, and `auto` which runs then checks):
   and three times the noise. A benchmark noisier than --max-cv is NOISY: `auto` gives it extra rounds
   (up to --max-rounds) and reports it as inconclusive if it stays noisy, rather than guessing.
 
+Hardware counters. Where the OS exposes them (Linux perf_event; not Windows), nanobench reports
+instructions, CPU cycles, branches and branch misses per op. They are kept with every record and
+baseline. Instructions per op are nearly deterministic, so they are judged with a tight tolerance
+(--instr-tolerance, 2%): a change that adds work shows even when timing noise would hide it. Cycles per
+op are judged like time but do not depend on the clock speed. The report adds IPC and the branch-miss
+rate, and pairs add the instruction ratio against the hand-written reference: exactly how much more
+work the vocabulary does. A counter regression counts like a time regression.
+
 Verdicts: REGRESSED (slower, significant), IMPROVED (faster, significant: a progression to record with
 `baseline`), ok, NOISY, new, missing. Pairs: in every group containing a name with "hand-written" (the
 fastest-known reference, never weakened), each other member's time is divided by the reference's in the
@@ -137,12 +145,29 @@ def _launch(cmd):
         raise subprocess.CalledProcessError(code, cmd)
 
 
-def measure(exe, args, scratch):
-    """Runs the benchmark executable once; returns {name: ns per op} from its nanobench JSON."""
+COUNTERS = {"instructions": "median(instructions)", "cycles": "median(cpucycles)",
+            "branches": "median(branchinstructions)", "branch_misses": "median(branchmisses)"}
+
+
+def measure_full(exe, args, scratch):
+    """Runs the benchmark executable once; returns {name: (ns per op, {counter: per op})}.
+
+    Counters are included only when the platform provides them (nanobench reports 0 otherwise).
+    """
     out = Path(scratch) / "one.json"
     _launch([exe, *args, "--json", str(out)])
     data = json.loads(out.read_text(encoding="utf-8"))
-    return {r["name"]: r["median(elapsed)"] / r["batch"] * 1e9 for r in data["results"]}
+    results = {}
+    for r in data["results"]:
+        batch = r["batch"] or 1.0
+        counters = {k: r[f] / batch for k, f in COUNTERS.items() if r.get(f)}
+        results[r["name"]] = (r["median(elapsed)"] / batch * 1e9, counters)
+    return results
+
+
+def measure(exe, args, scratch):
+    """Runs the benchmark executable once; returns {name: ns per op}."""
+    return {name: ns for name, (ns, _) in measure_full(exe, args, scratch).items()}
 
 
 def list_names(exe, text_filter):
@@ -155,8 +180,10 @@ def group_of(name):
     return name.split(", ", 1)[0]
 
 
-def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0, samples=None, meta=None, positions=None):
+def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0, samples=None, meta=None, positions=None,
+               counters=None):
     samples = samples if samples is not None else {n: [] for n in names}
+    counters = counters if counters is not None else {}
     positions = positions if positions is not None else {n: [] for n in names}
     meta = meta if meta is not None else []
     extra = ["--epochs", str(epochs)] if epochs else []
@@ -176,7 +203,10 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
                 rng.shuffle(members)
                 sequence += members
             for k, n in enumerate(sequence):
-                samples.setdefault(n, []).append(measure(exe, ["--exact", n, *extra], scratch)[n])
+                ns, found = measure_full(exe, ["--exact", n, *extra], scratch)[n]
+                samples.setdefault(n, []).append(ns)
+                for key, value in found.items():
+                    counters.setdefault(n, {}).setdefault(key, []).append(value)
                 # Where in the round it ran (0 = start, 1 = end), to interpolate the clock between calibrations.
                 positions.setdefault(n, []).append(round((k + 0.5) / len(sequence), 4))
             cal_end = measure(exe, ["--calibration", *extra], scratch)[CALIBRATION]
@@ -184,18 +214,18 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
                          "calibration_start_ns": cal_start, "calibration_end_ns": cal_end})
             print(f"round {r + 1}: load {load:.0%}{'' if quiet else ' (busy)'}, calibration {cal_start:,.0f}/{cal_end:,.0f} ns,"
                   f" {sum(len(m) for m in groups.values())} benchmarks", flush=True)
-    return samples, meta, positions
+    return samples, meta, positions, counters
 
 
 def run_command(args):
     names = list_names(args.exe, args.filter)
-    samples, meta, positions = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    write_samples(args.out, args.exe, samples, meta, positions, args.epochs)
+    samples, meta, positions, counters = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
+    write_samples(args.out, args.exe, samples, meta, positions, args.epochs, counters)
     return 0
 
 
-def write_samples(path, exe, samples, meta, positions, epochs=0):
-    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "host": platform.node(), "machine": platform.machine(),
+def write_samples(path, exe, samples, meta, positions, epochs=0, counters=None):
+    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
               "system": f"{platform.system()} {platform.release()}", "rounds": meta, "samples": samples,
               "positions": positions}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +260,9 @@ def summarise(record):
             t = where[i] if i < len(where) else 0.5
             clock = rounds[i]["calibration_start_ns"] + t * (rounds[i]["calibration_end_ns"] - rounds[i]["calibration_start_ns"])
             scaled.append(v * cal_median / clock)
-        out[name] = {"median_ns": statistics.median(scaled), "cv": robust_cv(scaled), "n": len(scaled), "rounds": scaled}
+        found = record.get("counters", {}).get(name, {})
+        out[name] = {"median_ns": statistics.median(scaled), "cv": robust_cv(scaled), "n": len(scaled), "rounds": scaled,
+                     "counters": {k: {"median": statistics.median(v), "cv": robust_cv(v)} for k, v in found.items() if v}}
     drift = (rounds[-1]["calibration_end_ns"] / rounds[0]["calibration_start_ns"] - 1.0) if rounds else 0.0
     return out, cal_median, robust_cv(cal), drift
 
@@ -252,6 +284,10 @@ def pair_ratios(stats):
             per_round = [a / b for a, b in zip(stats[m]["rounds"], stats[ref]["rounds"]) if b > 0]
             if per_round:
                 pairs[m] = {"reference": ref, "ratio": statistics.median(per_round), "cv": robust_cv(per_round)}
+                mi = stats[m]["counters"].get("instructions")
+                ri = stats[ref]["counters"].get("instructions")
+                if mi and ri and ri["median"] > 0:
+                    pairs[m]["instruction_ratio"] = mi["median"] / ri["median"]
     return pairs
 
 
@@ -277,9 +313,12 @@ def baseline_data(record):
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
             "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0),
-            "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"]}
+            "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"],
+                               **{k: round(c["median"], 2) for k, c in s["counters"].items()}}
                            for n, s in sorted(stats.items())},
-            "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4)} for n, p in sorted(pairs.items())},
+            "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4),
+                          **({"instruction_ratio": round(p["instruction_ratio"], 4)} if "instruction_ratio" in p else {})}
+                      for n, p in sorted(pairs.items())},
             "accepted": []}
 
 
@@ -315,8 +354,10 @@ def accept_command(args):
         print("bench_check: the baseline is in the old format; re-record it with `baseline --reason ...` first")
         return 2
     if args.all_changed:
-        rows, pair_rows, _ = evaluate(record, path, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute)
-        names = [r[0] for r in rows if r[5] in ("REGRESSED", "IMPROVED")] + [p[0] for p in pair_rows if p[4] in ("REGRESSED", "IMPROVED")]
+        rows, pair_rows, env = evaluate(record, path, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute, False,
+                                        args.instr_tolerance)
+        names = ([r[0] for r in rows if r[5] in ("REGRESSED", "IMPROVED")] + [p[0] for p in pair_rows if p[4] in ("REGRESSED", "IMPROVED")]
+                 + [row["name"] for row in env["counter_rows"] if row["verdicts"]])
     else:
         names = args.benchmark
     unknown = [n for n in names if n not in fresh["benchmarks"]]
@@ -331,6 +372,11 @@ def accept_command(args):
         old = data["benchmarks"].get(n, {}).get("median_ns")
         changes[n] = {"from_ns": old, "to_ns": new["median_ns"],
                       "change": None if not old else round(new["median_ns"] / old - 1.0, 4)}
+        for key in COUNTERS:
+            if key in new:
+                before = data["benchmarks"].get(n, {}).get(key)
+                changes[n][key] = {"from": before, "to": new[key],
+                                   "change": None if not before else round(new[key] / before - 1.0, 4)}
         data["benchmarks"][n] = new
         if n in fresh["pairs"]:
             changes[n]["pair_ratio"] = {"from": data.get("pairs", {}).get(n, {}).get("ratio"), "to": fresh["pairs"][n]["ratio"]}
@@ -339,7 +385,9 @@ def accept_command(args):
                                             "reason": args.reason, "benchmarks": changes})
     write_baseline(path, data)
     for n, c in changes.items():
-        delta = "new" if c["change"] is None else f"{c['change']:+.1%}"
+        delta = "new" if c["change"] is None else f"time {c['change']:+.1%}"
+        if c.get("instructions", {}).get("change") is not None:
+            delta += f", instructions {c['instructions']['change']:+.1%}"
         print(f"accepted {n}: {delta}")
     print(f"logged in {path}; commit it with the change, and say why")
     return 0
@@ -356,7 +404,7 @@ def judge(change, noise, tolerance, cv, max_cv):
     return "ok"
 
 
-def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute, filtered=False):
+def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute, filtered=False, instr_tolerance=0.02):
     stats, cal, cal_cv, cal_drift = summarise(record)
     pairs = pair_ratios(stats)
     if isinstance(baseline_path, dict):
@@ -391,6 +439,22 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
         for name in sorted(set(base) - set(stats)):
             rows.append((name, base[name], None, None, None, "missing"))
 
+    counter_rows = []
+    for name, s in sorted(stats.items()):
+        c = s["counters"]
+        if not c:
+            continue
+        b = base.get(name, {})
+        row = {"name": name, "now": {k: v["median"] for k, v in c.items()}, "verdicts": []}
+        for key, tol in (("instructions", instr_tolerance), ("cycles", tolerance)):
+            if key in c and b.get(key):
+                change = c[key]["median"] / b[key] - 1.0
+                row[key + "_change"] = change
+                verdict = judge(change, c[key]["cv"], tol, 0.0, 1.0)
+                if verdict in ("REGRESSED", "IMPROVED"):
+                    row["verdicts"].append(f"{key} {verdict}")
+        counter_rows.append(row)
+
     pair_rows = []
     for name, p in sorted(pairs.items()):
         bp = base_pairs.get(name)
@@ -407,7 +471,8 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
            f"epochs differ (now {record.get('epochs', 0) or 'default'}, baseline {base_epochs or 'default'}): absolute times are not like for like; pair ratios still are",
            "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
-           "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline}
+           "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline,
+           "counter_rows": counter_rows, "instr_tolerance": instr_tolerance}
     return rows, pair_rows, env
 
 
@@ -446,28 +511,48 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
     section("Inconclusive: too noisy to judge", {"NOISY"})
     section("Unchanged, new or missing", {"ok", "new", "missing"})
 
+    counter_rows = env.get("counter_rows", [])
+    if counter_rows:
+        lines.append(f"\n**Hardware counters per op** (instructions tolerance {env['instr_tolerance']:.0%};"
+                     " cycles do not depend on clock speed)\n")
+        lines.append("| Benchmark | Instructions | Change | Cycles | Change | IPC | Branch misses | Verdict |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+        for row in counter_rows:
+            now = row["now"]
+            ins, cyc = now.get("instructions"), now.get("cycles")
+            ipc = f"{ins / cyc:.2f}" if ins and cyc else "-"
+            miss = f"{now['branch_misses'] / now['branches']:.2%}" if now.get("branches") and "branch_misses" in now else "-"
+            lines.append(f"| {row['name']} | {num(ins)} | {pct(row.get('instructions_change'))} | {num(cyc)}"
+                         f" | {pct(row.get('cycles_change'))} | {ipc} | {miss} | {', '.join(row['verdicts']) or 'ok'} |")
+    else:
+        lines.append("\nHardware counters: not available on this platform (Linux perf_event provides instructions and cycles).")
+
     if pair_rows:
         lines.append(f"\n**Pairs against hand-written references** (ratio > 1 means slower than the reference;"
                      f" pair tolerance {pair_tolerance:.0%})\n")
-        lines.append("| Benchmark | Reference | Ratio now | Baseline ratio | Change | Spread | Verdict |")
-        lines.append("|---|---|---:|---:|---:|---:|---|")
+        lines.append("| Benchmark | Reference | Ratio now | Baseline ratio | Change | Spread | Instruction ratio | Verdict |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|---|")
         for name, p, bp, change, v in pair_rows:
             base_ratio = "-" if not bp else format(bp["ratio"], ".3f") + "x"
-            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%} | {v} |")
+            instr = format(p["instruction_ratio"], ".3f") + "x" if "instruction_ratio" in p else "-"
+            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%} | {instr} | {v} |")
     return "\n".join(lines)
 
 
 def report(record, args):
     rows, pair_rows, env = evaluate(record, args.baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
-                                    bool(getattr(args, "filter", "")))
+                                    bool(getattr(args, "filter", "")), args.instr_tolerance)
     text = render(rows, pair_rows, env, args.baseline, args.tolerance, args.pair_tolerance)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
             f.write(f"### {record.get('exe', 'Benchmarks')} against {Path(args.baseline).name}\n\n{text}\n\n")
-    regressed = sum(r[5] == "REGRESSED" for r in rows) + sum(p[4] == "REGRESSED" for p in pair_rows)
-    improved = sum(r[5] == "IMPROVED" for r in rows) + sum(p[4] == "IMPROVED" for p in pair_rows)
+    counter_verdicts = [v for row in env["counter_rows"] for v in row["verdicts"]]
+    regressed = (sum(r[5] == "REGRESSED" for r in rows) + sum(p[4] == "REGRESSED" for p in pair_rows)
+                 + sum(v.endswith("REGRESSED") for v in counter_verdicts))
+    improved = (sum(r[5] == "IMPROVED" for r in rows) + sum(p[4] == "IMPROVED" for p in pair_rows)
+                + sum(v.endswith("IMPROVED") for v in counter_verdicts))
     noisy = sum(r[5] == "NOISY" for r in rows) + sum(p[4] == "NOISY" for p in pair_rows)
     print(f"\nperf: {regressed} regressed, {improved} improved, {noisy} inconclusive")
     return rows, pair_rows, regressed
@@ -483,8 +568,9 @@ def auto_command(args):
     if os.environ.get("SUB0MATH_PERF_SKIP"):
         return 0  # the gate builds benchmarks itself and measures them once
     names = list_names(args.exe, args.filter)
-    samples, meta, positions = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(args.exe).name, "epochs": args.epochs,
+    samples, meta, positions, counters = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
+    record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(args.exe).name,
+              "epochs": args.epochs,
               "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total.
     while len(meta) < args.max_rounds:
@@ -498,13 +584,13 @@ def auto_command(args):
         # Extra rounds re-measure only the noisy set; the others repeat their median so rounds stay aligned.
         before = {n: len(v) for n, v in samples.items()}
         run_rounds(args.exe, sorted(noisy), 1, args.epochs, args.max_load, args.settle, args.seed, len(meta), samples, meta,
-                   positions)
+                   positions, counters)
         for n, v in samples.items():
             if len(v) == before[n]:
                 v.append(statistics.median(v))
                 positions[n].append(0.5)
     if args.out:
-        write_samples(args.out, args.exe, samples, meta, positions, args.epochs)
+        write_samples(args.out, args.exe, samples, meta, positions, args.epochs, counters)
     if args.record and args.target:
         save_record(Path(args.repo or "."), args.target, record, only_if_missing=True)
     _, _, regressed = report(record, args)
@@ -612,8 +698,9 @@ def gate_command(args):
             continue
         exe = t["exe"]
         names = list_names(exe, "")
-        samples, meta, positions = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-        record = {"rounds": meta, "samples": samples, "positions": positions, "exe": Path(exe).name, "epochs": args.epochs,
+        samples, meta, positions, counters = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
+        record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(exe).name,
+                  "epochs": args.epochs,
                   "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
         save_record(repo, target, record)  # the record before push
         args.baseline = t["baseline"]
@@ -623,9 +710,11 @@ def gate_command(args):
         regressed_ref = []
         if ref:
             print(f"\n### Against the local record of {ref_sha[:9]} (like for like on this machine)\n")
-            ref_rows, ref_pairs, env = evaluate(record, baseline_data(ref), args.tolerance, args.pair_tolerance, args.max_cv, args.absolute)
+            ref_rows, ref_pairs, env = evaluate(record, baseline_data(ref), args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
+                                                False, args.instr_tolerance)
             print(render(ref_rows, ref_pairs, env, f"record {ref_sha[:9]}", args.tolerance, args.pair_tolerance))
-            regressed_ref = [r[0] for r in ref_rows if r[5] == "REGRESSED"] + [p[0] for p in ref_pairs if p[4] == "REGRESSED"]
+            regressed_ref = ([r[0] for r in ref_rows if r[5] == "REGRESSED"] + [p[0] for p in ref_pairs if p[4] == "REGRESSED"]
+                             + [row["name"] for row in env["counter_rows"] if any(v.endswith("REGRESSED") for v in row["verdicts"])])
         else:
             print("\nsub0perf: no local record of an earlier commit; it is made by the first clean build after a checkout")
         baseline_rel = os.path.relpath(t["baseline"], repo).replace("\\", "/")
@@ -711,6 +800,7 @@ def main():
     parser.add_argument("--settle", type=float, default=30.0, help="seconds to wait for load to fall")
     parser.add_argument("--tolerance", type=float, default=0.10)
     parser.add_argument("--pair-tolerance", type=float, default=0.05)
+    parser.add_argument("--instr-tolerance", type=float, default=0.02, help="instructions per op change that counts")
     parser.add_argument("--max-cv", type=float, default=0.05, help="spread above which a benchmark is inconclusive")
     parser.add_argument("--absolute", action="store_true", help="no calibration or drift correction")
     parser.add_argument("--report-only", action="store_true", help="never fail; report only")
