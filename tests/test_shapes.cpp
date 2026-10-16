@@ -40,38 +40,38 @@ static_assert(sizeof(Triangle<float, 3>) == 9 * sizeof(float));
 
 TEST_CASE("Oriented box: nearest point, containment and bounds")
 {
-    // A 2 x 0.2 bar along the diagonal y = x.
-    const OrientedBox<double, 2> bar{{0.0, 0.0}, {1.0, 0.1}, rotation2(std::atan(1.0))};
-    CHECK(contains(bar, Point2d{0.5, 0.5}));
-    CHECK_FALSE(contains(bar, Point2d{0.5, -0.5}));
+    // A 2 x 0.2 strip along the diagonal y = x.
+    const OrientedBox<double, 2> strip{{0.0, 0.0}, {1.0, 0.1}, rotation2(std::atan(1.0))};
+    CHECK(contains(strip, Point2d{0.5, 0.5}));
+    CHECK_FALSE(contains(strip, Point2d{0.5, -0.5}));
 
-    // (0, 1) is 0.707 along the bar and 0.707 across it; across is clamped to the 0.1 half width.
-    const Point2d nearest = closestPoint(bar, Point2d{0.0, 1.0});
+    // (0, 1) is 0.707 along the strip and 0.707 across it; across is clamped to the 0.1 half width.
+    const Point2d nearest = closestPoint(strip, Point2d{0.0, 1.0});
     CHECK(nearest.x == doctest::Approx(0.5 - 0.1 / Root2));
     CHECK(nearest.y == doctest::Approx(0.5 + 0.1 / Root2));
-    const Point2d inside = closestPoint(bar, Point2d{0.2, 0.2}); // inside: itself
+    const Point2d inside = closestPoint(strip, Point2d{0.2, 0.2}); // inside: itself
     CHECK(inside.x == doctest::Approx(0.2));
     CHECK(inside.y == doctest::Approx(0.2));
 
-    const auto bounds = boundingBox(bar);
+    const auto bounds = boundingBox(strip);
     CHECK(bounds.hi.x == doctest::Approx(1.1 / Root2));
     CHECK(bounds.lo.y == doctest::Approx(-1.1 / Root2));
 }
 
 TEST_CASE("Oriented box against axis-aligned blocks (2D separating axes)")
 {
-    const OrientedBox<double, 2> bar{{0.0, 0.0}, {1.0, 0.1}, rotation2(std::atan(1.0))};
-    // Inside the bar's bounding box but off the diagonal: only an oriented test can reject it.
+    const OrientedBox<double, 2> strip{{0.0, 0.0}, {1.0, 0.1}, rotation2(std::atan(1.0))};
+    // Inside the strip's bounding box but off the diagonal: only an oriented test can reject it.
     const Aabb<double, 2> offDiagonal{{0.5, -0.9}, {0.9, -0.5}};
-    CHECK(boundingBox(bar).intersects(offDiagonal));
-    CHECK_FALSE(overlaps(bar, offDiagonal));
-    CHECK(overlaps(bar, Aabb<double, 2>{{0.4, 0.4}, {0.6, 0.6}}));
-    CHECK_FALSE(overlaps(bar, Aabb<double, 2>{{2.0, 2.0}, {3.0, 3.0}}));
+    CHECK(boundingBox(strip).intersects(offDiagonal));
+    CHECK_FALSE(overlaps(strip, offDiagonal));
+    CHECK(overlaps(strip, Aabb<double, 2>{{0.4, 0.4}, {0.6, 0.6}}));
+    CHECK_FALSE(overlaps(strip, Aabb<double, 2>{{2.0, 2.0}, {3.0, 3.0}}));
 }
 
 TEST_CASE("Oriented boxes in 3D: separation found only on an edge-pair axis")
 {
-    // A is the unit cube [-1, 1]^3. B is a thin bar lying across A's edge x = y = 1, rolled 45 degrees
+    // A is the unit cube [-1, 1]^3. B is a thin strip lying across A's edge x = y = 1, rolled 45 degrees
     // about its own axis so its corner faces that edge. Face axes cannot separate them; a_z x b_long can.
     const double h = 1.0 / Root2;
     Mat<double, 3, 3> axes{};
@@ -79,13 +79,13 @@ TEST_CASE("Oriented boxes in 3D: separation found only on an edge-pair axis")
     axes.columns[1] = {0.5, 0.5, h};               // rolled 45 degrees
     axes.columns[2] = {-0.5, -0.5, h};
     const OrientedBox<double, 3> cube{{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}};
-    const auto bar = [&](double offset) {
+    const auto strip = [&](double offset) {
         return OrientedBox<double, 3>{{1.0 + offset, 1.0 + offset, 0.0}, {1.0, 0.05, 0.05}, axes};
     };
-    // The bar's corner reaches 0.05 * sqrt(2) toward the edge; the gap is offset * sqrt(2).
-    CHECK_FALSE(overlaps(cube, bar(0.06)));
-    CHECK(overlaps(cube, bar(0.04)));
-    CHECK(overlaps(bar(0.04), cube) == overlaps(cube, bar(0.04)));
+    // The strip's corner reaches 0.05 * sqrt(2) toward the edge; the gap is offset * sqrt(2).
+    CHECK_FALSE(overlaps(cube, strip(0.06)));
+    CHECK(overlaps(cube, strip(0.04)));
+    CHECK(overlaps(strip(0.04), cube) == overlaps(cube, strip(0.04)));
     CHECK(overlaps(cube, cube));
 }
 
