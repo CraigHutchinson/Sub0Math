@@ -425,6 +425,19 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
     else:
         factor, mode = 1.0, "absolute"
 
+    # Controls: hand-written references do not use the library under test, so whatever moves them beyond
+    # the clock is the environment (cache and memory contention, other load). Their median change is
+    # factored out; a library regression cannot hide in it.
+    controls = [n for n in common if REFERENCE_MARK in n]
+    environment_shift = None
+    if not absolute and controls:
+        control = statistics.median(stats[n]["median_ns"] / (base[n]["median_ns"] * factor) for n in controls)
+        factor *= control
+        environment_shift = control - 1.0
+        mode += f"; {len(controls)} control(s) (hand-written references) moved {environment_shift:+.1%} beyond that, factored out"
+    elif not absolute and base:
+        mode += "; no control benchmarks (add a hand-written reference to enable environment correction)"
+
     rows = []
     for name, s in sorted(stats.items()):
         if name not in base:
@@ -472,7 +485,8 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
            "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
            "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline,
-           "counter_rows": counter_rows, "instr_tolerance": instr_tolerance}
+           "counter_rows": counter_rows, "instr_tolerance": instr_tolerance, "environment_shift": environment_shift,
+           "tolerance": tolerance}
     return rows, pair_rows, env
 
 
@@ -482,6 +496,11 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
     lines = [f"**Environment:** {env['rounds']} interleaved rounds; load max {env['max_load']:.0%}"
              f" ({env['busy_rounds']} round(s) above the limit); calibration {env['calibration_ns']:,.0f} ns,"
              f" spread {env['calibration_cv']:.1%}, clock drift first to last {env['clock_drift']:+.1%}."]
+    shift = env.get("environment_shift")
+    if shift is not None and abs(shift) > env.get("tolerance", 0.1) / 2:
+        lines.append(f"> The environment shifted {shift:+.1%} beyond the clock between the two measurements (seen in the"
+                     " controls, which do not use the library). It is factored out, but absolute verdicts are less"
+                     " certain than usual; pair ratios and instruction counts are unaffected.")
     if env.get("method"):
         lines.append(f"> Method mismatch: {env['method']}.")
     if abs(env["clock_drift"]) > 0.05:
