@@ -19,7 +19,7 @@ them without knowing where CPM put Sub0Math. Benchmarks include `<bench_runner.h
 | Gate | Where | Contract |
 |---|---|---|
 | Zero size overhead | `static_assert`s in the tests | Quantities, roles, vectors and matrices are exactly the size of their numbers and trivially copyable |
-| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins. Segment, triangle closest point and ray-triangle on `f64::Length` match their hand-written scalar kernels, within noise. Box against blocks: see the open gaps |
+| Zero time overhead | Paired benchmarks | `dot, f64::Length` and `x += v*dt, f64::Length` match their plain-double twins. Segment, triangle closest point and ray-triangle on `f64::Length` match their hand-written scalar kernels, within noise. Spatial transforms and inertia changes of frame match or beat hand-written scalar code. Box against blocks: see the open gaps |
 | Wrong code does not compile | Concept checks in the tests | Dimension mismatches, swapped or unnamed roles, silent narrowing, point + point |
 | Header self-containment | `Sub0Math_HeaderCheck` | Every public header compiles alone under the strict warning set |
 
@@ -220,6 +220,8 @@ Separately, models should still snap settled states to exact zero where that is 
 | 2026-10-16 | Passing blocks as `Aabb` corners costs about 30% against the hand-written reference, which takes centres from the grid index | Box-against-blocks pair | API changed: `AabbOverlapTester::overlapsCentred(centre, half)` for grid walks; the remaining gap is under Open gaps |
 | 2026-10-16 | nanobench 4.3.11 → 4.6.0 made the hand-written box-against-blocks reference about 11% faster (1,184–1,244 vs 1,362 ns); the vocabulary testers did not change, so their pair ratios rose from 0.95–0.98× to 1.06–1.09× | A/B: 4.6.0, 4.3.11, 4.6.0 again, 5 interleaved rounds each | The faster reference is the bar: open gap updated, baseline re-recorded with the reason logged |
 | 2026-10-19 | The pre-push gate blocked three pushes in a row in BikeDynamics, each time on a different benchmark and with no relevant code change: the repository has no hand-written controls, so environment shifts could not be factored out, and one 3-round measurement was enough to block | Gate logs: "Suspension analytical comparison", then "Terrain probe" | Confirmation pass (regressions re-measured for `--confirm-rounds` more rounds; only persisting ones block) and, without controls, a suite-spread noise floor (3x MAD of changes) |
+| 2026-10-19 | Spatial algebra: carrying an inertia to a parent frame (`X^T I X`) computed the full 3x3 `E^T I E`; the hand-written reference computes the six symmetric entries | Pair `inertia to parent x1024`: 1.15x, then 1.02x (5 interleaved rounds) | `applyInverse(SpatialInertia)` computes the upper triangle and mirrors it |
+| 2026-10-19 | `PluckerTransform` apply/applyInverse runs 0.82x of hand-written scalar code: GCC 16 SLP-vectorises the column-sum form (`Mat * Vec`) but not the scalar expressions, even with stores deferred | Pair `spatial transform x1024`, vectorization remarks | The vocabulary is the fastest form known here; the scalar reference stays as the plain-numbers control |
 
 ## Measured (development host, GCC 16, -O3)
 
@@ -233,6 +235,8 @@ Separately, models should still snap settled states to exact zero where that is 
 | triangle closest point, hand-written scalars / Triangle<f64::Length> (1024 triangles) | 3021 / 3140; parity within noise across runs |
 | ray vs triangles, hand-written Moller-Trumbore / Ray<f64::Length> (1024 triangles) | 2966 / 2860; parity |
 | box vs 1024 blocks: hand-written (centres from index) / tester (centre, half) / tester (Aabb corners) | 921 / 1022 / 1309 |
+| spatial transform (motion `X m` and force `X^T f`), hand-written scalars / `PluckerTransform` | 8031 / 6716; pair 0.82x |
+| inertia to parent frame `X^T I X`, hand-written scalars / `PluckerTransform::applyInverse` | 13105 / 13296; pair 1.02x |
 
 Timings vary by a few percent run to run on a shared desktop; compare pairs measured together, and use
 best-of-N when judging a change.

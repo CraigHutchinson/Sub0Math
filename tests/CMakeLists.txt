@@ -19,6 +19,7 @@ add_executable(Sub0Math_Tests
     test_quantity.cpp
     test_role.cpp
     test_shapes.cpp
+    test_spatial.cpp
     test_transforms.cpp
     test_units.cpp
 )

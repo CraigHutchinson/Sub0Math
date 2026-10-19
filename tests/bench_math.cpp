@@ -305,7 +305,137 @@ void benchRayTriangle(sub0bench::BenchRunner& runner)
     });
 }
 
+// Spatial algebra for rigid-body dynamics: one Plücker transform per body, applied to a motion and (as
+// its transpose) to a force, and a composite inertia carried to the parent frame. The hand-written side
+// is plain scalar code on the same column-major data, written for speed (the inertia result is
+// symmetric, so it computes six entries and mirrors them).
+struct SpatialData
+{
+    std::vector<PluckerTransformd> transforms;
+    std::vector<SpatialMotiond> motions;
+    std::vector<SpatialForced> forces;
+    std::vector<SpatialInertiad> inertias;
+};
+
+SpatialData makeSpatialData()
+{
+    SpatialData d;
+    for (std::size_t i = 0; i < Count; ++i)
+    {
+        const double f = static_cast<double>(i % 29) * 0.21;
+        const RigidTransformd pose{Quatd::fromAxisAngle(normalized(Vec3d{1.0, f - 2.0, 0.5}), f64::Angle::fromSi(f)),
+                                   {0.3 * f, -0.2, 1.0 - f}};
+        d.transforms.push_back(PluckerTransformd::fromPose(pose));
+        d.motions.push_back({{f, -0.5, 0.25}, {0.1, f * 0.5, -1.0}});
+        d.forces.push_back({{0.2, f, -0.3}, {-f, 0.7, 0.4}});
+        Mat3d ic{};
+        ic(0, 0) = 0.3 + 0.01 * f;
+        ic(1, 1) = 0.2;
+        ic(2, 2) = 0.4;
+        ic(0, 1) = ic(1, 0) = 0.01;
+        d.inertias.push_back(SpatialInertiad::fromCentreOfMass(1.0 + f, {0.1, -0.3 * f, 0.2}, ic));
+    }
+    return d;
+}
+
+void benchSpatialTransform(sub0bench::BenchRunner& runner)
+{
+    const SpatialData d = makeSpatialData();
+    std::vector<SpatialMotiond> outMotion(Count);
+    std::vector<SpatialForced> outForce(Count);
+
+    runner.run("spatial transform x1024, hand-written scalars", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            const auto& c = d.transforms[k].rotation.columns; // column-major: e[c * 3 + r]
+            const double e[9] = {c[0].x, c[0].y, c[0].z, c[1].x, c[1].y, c[1].z, c[2].x, c[2].y, c[2].z};
+            const double rx = d.transforms[k].translation.x, ry = d.transforms[k].translation.y, rz = d.transforms[k].translation.z;
+            const SpatialMotiond& m = d.motions[k];
+            const double wx = m.angular.x, wy = m.angular.y, wz = m.angular.z;
+            const double ux = m.linear.x - (ry * wz - rz * wy), uy = m.linear.y - (rz * wx - rx * wz), uz = m.linear.z - (rx * wy - ry * wx);
+            const SpatialForced& f = d.forces[k];
+            const double fx = e[0] * f.linear.x + e[1] * f.linear.y + e[2] * f.linear.z;
+            const double fy = e[3] * f.linear.x + e[4] * f.linear.y + e[5] * f.linear.z;
+            const double fz = e[6] * f.linear.x + e[7] * f.linear.y + e[8] * f.linear.z;
+            const double ox = e[0] * wx + e[3] * wy + e[6] * wz, oy = e[1] * wx + e[4] * wy + e[7] * wz, oz = e[2] * wx + e[5] * wy + e[8] * wz;
+            const double lx = e[0] * ux + e[3] * uy + e[6] * uz, ly = e[1] * ux + e[4] * uy + e[7] * uz, lz = e[2] * ux + e[5] * uy + e[8] * uz;
+            const double nx = e[0] * f.angular.x + e[1] * f.angular.y + e[2] * f.angular.z + (ry * fz - rz * fy);
+            const double ny = e[3] * f.angular.x + e[4] * f.angular.y + e[5] * f.angular.z + (rz * fx - rx * fz);
+            const double nz = e[6] * f.angular.x + e[7] * f.angular.y + e[8] * f.angular.z + (rx * fy - ry * fx);
+            // Results are stored once, after every input is read: the outputs could alias the inputs.
+            outMotion[k] = {{ox, oy, oz}, {lx, ly, lz}};
+            outForce[k] = {{nx, ny, nz}, {fx, fy, fz}};
+        }
+        ankerl::nanobench::doNotOptimizeAway(outMotion.data());
+        ankerl::nanobench::doNotOptimizeAway(outForce.data());
+    });
+
+    runner.run("spatial transform x1024, PluckerTransform apply/applyInverse", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            outMotion[k] = d.transforms[k].apply(d.motions[k]);
+            outForce[k] = d.transforms[k].applyInverse(d.forces[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(outMotion.data());
+        ankerl::nanobench::doNotOptimizeAway(outForce.data());
+    });
+
+    std::vector<SpatialInertiad> outInertia(Count);
+    runner.run("inertia to parent x1024, hand-written scalars", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            const auto& ec = d.transforms[k].rotation.columns;
+            const auto& ic = d.inertias[k].rotational.columns;
+            const double e[9] = {ec[0].x, ec[0].y, ec[0].z, ec[1].x, ec[1].y, ec[1].z, ec[2].x, ec[2].y, ec[2].z};
+            const double i[9] = {ic[0].x, ic[0].y, ic[0].z, ic[1].x, ic[1].y, ic[1].z, ic[2].x, ic[2].y, ic[2].z};
+            const double rx = d.transforms[k].translation.x, ry = d.transforms[k].translation.y, rz = d.transforms[k].translation.z;
+            const double m = d.inertias[k].mass;
+            const Vec3d& h = d.inertias[k].firstMoment;
+            const double yx = e[0] * h.x + e[1] * h.y + e[2] * h.z;
+            const double yy = e[3] * h.x + e[4] * h.y + e[5] * h.z;
+            const double yz = e[6] * h.x + e[7] * h.y + e[8] * h.z;
+            // A = I E (column-major), then the upper triangle of E^T A.
+            double a[9];
+            for (int c = 0; c < 3; ++c)
+            {
+                a[c * 3 + 0] = i[0] * e[c * 3] + i[3] * e[c * 3 + 1] + i[6] * e[c * 3 + 2];
+                a[c * 3 + 1] = i[1] * e[c * 3] + i[4] * e[c * 3 + 1] + i[7] * e[c * 3 + 2];
+                a[c * 3 + 2] = i[2] * e[c * 3] + i[5] * e[c * 3 + 1] + i[8] * e[c * 3 + 2];
+            }
+            const double y[3] = {yx, yy, yz};
+            const double r[3] = {rx, ry, rz};
+            const double diagonal = 2.0 * (rx * yx + ry * yy + rz * yz) + m * (rx * rx + ry * ry + rz * rz);
+            SpatialInertiad out;
+            double o[9];
+            for (int c = 0; c < 3; ++c)
+            {
+                for (int row = 0; row <= c; ++row)
+                {
+                    const double v = e[row * 3] * a[c * 3] + e[row * 3 + 1] * a[c * 3 + 1] + e[row * 3 + 2] * a[c * 3 + 2]
+                                     - y[row] * r[c] - r[row] * (y[c] + m * r[c]) + (row == c ? diagonal : 0.0);
+                    o[c * 3 + row] = v;
+                    o[row * 3 + c] = v;
+                }
+            }
+            out.mass = m;
+            out.firstMoment = {yx + m * rx, yy + m * ry, yz + m * rz};
+            out.rotational.columns = {Vec3d{o[0], o[1], o[2]}, Vec3d{o[3], o[4], o[5]}, Vec3d{o[6], o[7], o[8]}};
+            outInertia[k] = out;
+        }
+        ankerl::nanobench::doNotOptimizeAway(outInertia.data());
+    });
+
+    runner.run("inertia to parent x1024, PluckerTransform::applyInverse", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            outInertia[k] = d.transforms[k].applyInverse(d.inertias[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(outInertia.data());
+    });
+}
+
 } // namespace
+
 
 int main(int argc, char** argv)
 {
@@ -331,5 +461,6 @@ int main(int argc, char** argv)
     benchTriangleClosest(runner);
     benchBoxBlocks(runner);
     benchRayTriangle(runner);
+    benchSpatialTransform(runner);
     return runner.finish();
 }

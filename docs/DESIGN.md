@@ -7,7 +7,7 @@ project, in which unit and argument-order mistakes do not compile. Accepted in
 ## Scope
 
 In: value types and their algebra. Numbers (`number/`), dimensioned quantities and units (`units/`),
-named roles (`role/`), vectors, matrices, quaternions and rigid transforms (`linear/`), points and boxes
+named roles (`role/`), vectors, matrices, quaternions, rigid transforms and spatial (6D) algebra (`linear/`), points and boxes
 (`geometry/`).
 
 Out: numerical methods (integrators, solvers: Sub0Physics), signal processing (Sub0Dsp), rendering,
@@ -68,6 +68,20 @@ using RetryCount = sub0math::Role<struct RetryCountTag, std::uint32_t>;
 - `Quat<T>`: unit quaternion rotations; `rotate` works on vectors of numbers or quantities.
 - `RigidTransform<T, L>`: rotation then translation; `L` is the position type (`f64::Length` for physics).
 - `Aabb<T, N>`: inclusive axis-aligned boxes.
+- **Spatial algebra** for rigid-body dynamics (Featherstone's 6D vectors), added for Sub0Physics'
+  multibody core (ADR 0003, step M1a) and grown by use like the shapes:
+  - `SpatialMotion<T>` (velocities, accelerations, joint axes) and `SpatialForce<T>` (forces, momenta)
+    are separate types: they cannot be added together, and the only product between them is
+    `dot(motion, force)`, a power. `cross(v, m)` is Featherstone's `crm`, `cross(v, f)` his `crf`.
+  - `SpatialInertia<T>` is compact: mass, first moment `h = m c` and rotational inertia about the frame
+    origin (13 numbers, not 36); `fromCentreOfMass` applies the parallel-axis theorem, sums are
+    component-wise, and `inertia * motion` is a force.
+  - `PluckerTransform<T>` (Featherstone's `B_X_A`: rotation `E` and translation `r`) is made from a
+    `RigidTransform` pose and applies to motions as `X`, to forces as the dual `X*`, and in reverse
+    (`applyInverse`: `X^-1` for motions, `X^T` for forces, `X^T I X` for inertias). Composition and
+    `inverse` follow `RigidTransform`.
+  - Components are plain SI numbers, like `Mat`: one type carries velocities, accelerations and unit
+    axes, so units belong to the interfaces that build them. Use double for dynamics.
 
 ## Shapes
 
