@@ -54,6 +54,20 @@ class JudgingTest(unittest.TestCase):
         # The pair ratio for group 2 is relative to the same environment and still judges.
         self.assertEqual({p[0]: p[4] for p in pairs}["Group 2, vocabulary"], "REGRESSED")
 
+    def test_pair_ratio_ignores_filled_rounds(self):
+        rec = record({"G, vocabulary": 1000.0, "G, hand-written": 1000.0}, jitter=0.0)
+        # Two extra rounds in a 30% slower environment: only the vocabulary member was re-measured,
+        # the reference got its median copied in (as alignment filling does).
+        for _ in range(2):
+            rec["rounds"].append(dict(rec["rounds"][0]))
+            rec["samples"]["G, vocabulary"].append(1300.0)
+            rec["positions"]["G, vocabulary"].append(0.5)
+            rec["samples"]["G, hand-written"].append(1000.0)
+            rec["positions"]["G, hand-written"].append(None)
+        stats, _, _, _ = bc.summarise(rec)
+        pairs = bc.pair_ratios(stats)
+        self.assertAlmostEqual(pairs["G, vocabulary"]["ratio"], 1.0, places=6)
+
     def test_random_shifts_without_controls_do_not_block(self):
         shifts = [-0.15, 0.15, 0.12, -0.14, 0.15, -0.10, 0.13, -0.12]  # as if random, +-15%
         base = {n: 1000.0 + 50 * i for i, n in enumerate(NAMES)}

@@ -263,13 +263,16 @@ def summarise(record):
     out = {}
     for name, values in record["samples"].items():
         where = positions.get(name, [])
-        scaled = []
+        scaled, measured = [], []
         for i, v in enumerate(values[:len(rounds)]):
-            t = where[i] if i < len(where) else 0.5
+            filled = i < len(where) and where[i] is None
+            measured.append(not filled)
+            t = 0.5 if filled or i >= len(where) else where[i]
             clock = rounds[i]["calibration_start_ns"] + t * (rounds[i]["calibration_end_ns"] - rounds[i]["calibration_start_ns"])
             scaled.append(v * cal_median / clock)
         found = record.get("counters", {}).get(name, {})
         out[name] = {"median_ns": statistics.median(scaled), "cv": robust_cv(scaled), "n": len(scaled), "rounds": scaled,
+                     "measured": measured,
                      "counters": {k: {"median": statistics.median(v), "cv": robust_cv(v)} for k, v in found.items() if v}}
     drift = (rounds[-1]["calibration_end_ns"] / rounds[0]["calibration_start_ns"] - 1.0) if rounds else 0.0
     return out, cal_median, robust_cv(cal), drift
@@ -289,7 +292,10 @@ def pair_ratios(stats):
         for m in members:
             if m == ref:
                 continue
-            per_round = [a / b for a, b in zip(stats[m]["rounds"], stats[ref]["rounds"]) if b > 0]
+            # Only rounds where both were measured: a filled median beside a fresh measurement is not adjacent.
+            per_round = [a / b for a, b, ma, mb in zip(stats[m]["rounds"], stats[ref]["rounds"],
+                                                     stats[m].get("measured", []), stats[ref].get("measured", []))
+                         if b > 0 and ma and mb]
             if per_round:
                 pairs[m] = {"reference": ref, "ratio": statistics.median(per_round), "cv": robust_cv(per_round)}
                 mi = stats[m]["counters"].get("instructions")
@@ -635,7 +641,7 @@ def extend_rounds(run, names, rounds, samples, meta, positions, counters):
         for n, v in samples.items():
             if len(v) == before[n]:
                 v.append(statistics.median(v))
-                positions.setdefault(n, []).append(0.5)
+                positions.setdefault(n, []).append(None)  # filled, not measured
 
 
 def regressions_in(evaluations):
@@ -657,7 +663,16 @@ def regressions_in(evaluations):
             if any(v.endswith("REGRESSED") for v in row["verdicts"]):
                 flagged.add(row["name"])
                 remeasure.add(row["name"])
-    return flagged, remeasure
+    return flagged, whole_groups(remeasure, evaluations)
+
+
+def whole_groups(names, evaluations):
+    """Expands names to every benchmark in their groups, so pair members are re-measured side by side."""
+    groups = {group_of(n) for n in names}
+    every = set()
+    for rows, pair_rows, env in evaluations:
+        every |= {r[0] for r in rows}
+    return {n for n in every if group_of(n) in groups} | set(names)
 
 
 def confirm_regressions(evaluate_all, remeasure_rounds, confirm_rounds):
@@ -694,6 +709,7 @@ def auto_command(args):
                                       bool(args.filter))
         noisy = {r[0] for r in rows if r[5] == "NOISY"} | {p[0] for p in pair_rows if p[4] == "NOISY"}
         noisy |= {p[1]["reference"] for p in pair_rows if p[4] == "NOISY"}
+        noisy = whole_groups(noisy, [(rows, pair_rows, None)])
         if not noisy:
             break
         print(f"{len(noisy)} benchmark(s) too noisy; adding a round for them", flush=True)
@@ -704,7 +720,7 @@ def auto_command(args):
         for n, v in samples.items():
             if len(v) == before[n]:
                 v.append(statistics.median(v))
-                positions[n].append(0.5)
+                positions[n].append(None)  # filled, not measured
     def rerun(names, n):
         extend_rounds(lambda ns, r, first, *rest: run_rounds(args.exe, ns, r, args.epochs, args.max_load, args.settle, args.seed,
                                                               first, *rest), names, n, samples, meta, positions, counters)
