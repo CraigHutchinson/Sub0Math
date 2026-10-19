@@ -233,7 +233,7 @@ def run_command(args):
 
 
 def write_samples(path, exe, samples, meta, positions, epochs=0, counters=None):
-    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
+    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "cpu": PIN_CPU, "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
               "system": f"{platform.system()} {platform.release()}", "rounds": meta, "samples": samples,
               "positions": positions}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +320,7 @@ def baseline_data(record):
             "system": record.get("system", f"{platform.system()} {platform.release()}"),
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
-            "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0),
+            "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0), "cpu": record.get("cpu"),
             "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"],
                                **{k: round(c["median"], 2) for k, c in s["counters"].items()}}
                            for n, s in sorted(stats.items())},
@@ -506,13 +506,23 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
 
     base_epochs = (baseline_path.get("epochs", 0) if isinstance(baseline_path, dict)
                    else json.loads(Path(baseline_path).read_text(encoding="utf-8")).get("epochs", 0) if have_baseline else 0)
-    env = {"method": None if record.get("epochs", 0) == base_epochs else
-           f"epochs differ (now {record.get('epochs', 0) or 'default'}, baseline {base_epochs or 'default'}): absolute times are not like for like; pair ratios still are",
+    base_data = baseline_path if isinstance(baseline_path, dict) else (
+        json.loads(Path(baseline_path).read_text(encoding="utf-8")) if have_baseline else {})
+    method_notes = []
+    if record.get("epochs", 0) != base_epochs:
+        method_notes.append(f"epochs differ (now {record.get('epochs', 0) or 'default'}, baseline {base_epochs or 'default'})")
+    if record.get("cpu") is not None and base_data.get("cpu") is not None and record.get("cpu") != base_data.get("cpu"):
+        method_notes.append(f"pinned CPU differs (now {record.get('cpu')}, baseline {base_data.get('cpu')}; cores of a hybrid CPU differ in speed)")
+    env = {"method": None if not method_notes else
+           "; ".join(method_notes) + ": absolute times are not like for like; pair ratios still are",
            "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
            "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline,
            "counter_rows": counter_rows, "instr_tolerance": instr_tolerance, "environment_shift": environment_shift,
            "tolerance": tolerance, "suite_spread": suite_spread}
+    if method_notes:  # absolute times measured differently cannot support a verdict either way
+        rows = [(n, b, st, raw, ch, "ENVIRONMENT" if v in ("REGRESSED", "IMPROVED") else v)
+                for (n, b, st, raw, ch, v) in rows]
     return rows, pair_rows, env
 
 
@@ -676,7 +686,7 @@ def auto_command(args):
     names = list_names(args.exe, args.filter)
     samples, meta, positions, counters = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
     record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(args.exe).name,
-              "epochs": args.epochs,
+              "epochs": args.epochs, "cpu": PIN_CPU,
               "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total.
     while len(meta) < args.max_rounds:
@@ -811,7 +821,7 @@ def gate_command(args):
         names = list_names(exe, "")
         samples, meta, positions, counters = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
         record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(exe).name,
-                  "epochs": args.epochs,
+                  "epochs": args.epochs, "cpu": PIN_CPU,
                   "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
         args.baseline = t["baseline"]
         ref_sha, ref = reference_record(repo, target, upstream)
