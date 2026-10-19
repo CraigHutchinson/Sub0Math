@@ -42,6 +42,18 @@ class JudgingTest(unittest.TestCase):
         self.assertEqual(sum(v == "REGRESSED" for v in verdicts.values()), 1)
         self.assertIsNone(env["suite_spread"])
 
+    def test_large_environment_shift_makes_absolute_verdicts_inconclusive(self):
+        base = {f"Group {i}, vocabulary": 1000.0 + 100 * i for i in range(4)}
+        base.update({f"Group {i}, hand-written": 900.0 + 100 * i for i in range(4)})
+        now = {n: t * 1.40 for n, t in base.items()}  # everything, controls included, 40% slower
+        now["Group 2, vocabulary"] *= 1.15  # plus a residual that would otherwise count
+        verdicts, pairs, env = judge_against(base, now)
+        self.assertGreater(env["environment_shift"], 0.10)
+        self.assertNotIn("REGRESSED", verdicts.values())
+        self.assertEqual(verdicts["Group 2, vocabulary"], "ENVIRONMENT")
+        # The pair ratio for group 2 is relative to the same environment and still judges.
+        self.assertEqual({p[0]: p[4] for p in pairs}["Group 2, vocabulary"], "REGRESSED")
+
     def test_random_shifts_without_controls_do_not_block(self):
         shifts = [-0.15, 0.15, 0.12, -0.14, 0.15, -0.10, 0.13, -0.12]  # as if random, +-15%
         base = {n: 1000.0 + 50 * i for i, n in enumerate(NAMES)}

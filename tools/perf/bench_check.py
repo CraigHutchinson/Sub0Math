@@ -467,6 +467,13 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
         change = changes[name]
         noise = max(s["cv"], b["cv"] or 0.0)
         rows.append((name, b, s, raw, change, judge(change, noise, tolerance, s["cv"], max_cv, spread_floor)))
+    # When the controls (which do not use the library) moved by more than the tolerance, the environment
+    # changed too much for absolute times to support a verdict either way: report them as ENVIRONMENT
+    # (inconclusive). Pair ratios and instruction counts are relative to the same environment and still judge.
+    environment_unstable = environment_shift is not None and abs(environment_shift) > tolerance
+    if environment_unstable:
+        rows = [(n, b, st, raw, ch, "ENVIRONMENT" if v in ("REGRESSED", "IMPROVED") else v)
+                for (n, b, st, raw, ch, v) in rows]
     if not filtered:  # a filtered run selects a subset; the rest are not missing
         for name in sorted(set(base) - set(stats)):
             rows.append((name, base[name], None, None, None, "missing"))
@@ -550,6 +557,8 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
     section("Regressions", {"REGRESSED"})
     section("Progressions (record them: run the baseline target and commit it, saying why)", {"IMPROVED"})
     section("Inconclusive: too noisy to judge", {"NOISY"})
+    section("Inconclusive: the environment shifted beyond the tolerance (see the controls); pairs and counters still judge",
+            {"ENVIRONMENT"})
     section("Unchanged, new or missing", {"ok", "new", "missing"})
 
     counter_rows = env.get("counter_rows", [])
@@ -594,7 +603,7 @@ def report(record, args):
                  + sum(v.endswith("REGRESSED") for v in counter_verdicts))
     improved = (sum(r[5] == "IMPROVED" for r in rows) + sum(p[4] == "IMPROVED" for p in pair_rows)
                 + sum(v.endswith("IMPROVED") for v in counter_verdicts))
-    noisy = sum(r[5] == "NOISY" for r in rows) + sum(p[4] == "NOISY" for p in pair_rows)
+    noisy = sum(r[5] in ("NOISY", "ENVIRONMENT") for r in rows) + sum(p[4] == "NOISY" for p in pair_rows)
     print(f"\nperf: {regressed} regressed, {improved} improved, {noisy} inconclusive")
     return rows, pair_rows, regressed
 
