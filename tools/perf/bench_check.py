@@ -7,7 +7,7 @@ noise, and paired comparisons with hand-written references.
   bench_check.py baseline --results samples.json --baseline perf/baselines/<host>.json
   bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
   bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
-  bench_check.py gate     [--repo DIR]                       (the pre-push hook; reads .git/sub0perf/config.json)
+  bench_check.py gate     [--repo DIR] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
   bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH
 
 How a run is made robust (`run`, and `auto` which runs then checks):
@@ -51,6 +51,14 @@ local record (like for like: same machine, same session conditions), unless the 
 accepted. Accepting is explicit: `accept` moves the named benchmarks' baseline to the new measurement
 and appends an entry (date, commit, reason, before and after) to the baseline's `accepted` log; commit
 that file with the change. `git push --no-verify` bypasses the hook, as with any git hook.
+
+Confirmation. A single short measurement is not enough evidence to block. In `auto` and `gate`, anything
+judged REGRESSED on the first pass (a benchmark, a pair or a counter, against the baseline or the earlier
+record) is measured again for --confirm-rounds more rounds (default 4; calibration as usual), and the
+verdicts are recomputed from all rounds. Only regressions that persist block; the rest are reported as
+"not confirmed". Where there are no controls (no hand-written reference), a change must also exceed 3x
+the suite's own spread of changes (median absolute deviation across all benchmarks) to count, since an
+environment shift cannot otherwise be told from a regression.
 
 `check` and `auto` exit 1 on any regression unless --report-only. With GITHUB_STEP_SUMMARY set, the
 report is appended to the job summary. Baselines from the earlier format (a number per benchmark) are
@@ -393,10 +401,11 @@ def accept_command(args):
     return 0
 
 
-def judge(change, noise, tolerance, cv, max_cv):
+def judge(change, noise, tolerance, cv, max_cv, spread=0.0):
+    """Verdict for a change. `spread` is the suite's own spread of changes, used only where there are no controls."""
     if cv > max_cv:
         return "NOISY"
-    threshold = max(tolerance, 3.0 * noise)
+    threshold = max(tolerance, 3.0 * noise, 3.0 * spread)
     if change > threshold:
         return "REGRESSED"
     if change < -threshold:
@@ -438,6 +447,16 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
     elif not absolute and base:
         mode += "; no control benchmarks (add a hand-written reference to enable environment correction)"
 
+    # Without controls nothing separates a library change from an environment shift, so the spread of
+    # changes across the whole suite (median absolute deviation) is an extra noise floor: one benchmark
+    # must stand out from the others, not just from its baseline.
+    changes = {n: stats[n]["median_ns"] / (base[n]["median_ns"] * factor) - 1.0 for n in common}
+    suite_spread = None
+    if not controls and len(changes) >= 3:
+        centre = statistics.median(changes.values())
+        suite_spread = statistics.median(abs(c - centre) for c in changes.values())
+    spread_floor = suite_spread or 0.0
+
     rows = []
     for name, s in sorted(stats.items()):
         if name not in base:
@@ -445,9 +464,9 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
             continue
         b = base[name]
         raw = s["median_ns"] / b["median_ns"] - 1.0
-        change = s["median_ns"] / (b["median_ns"] * factor) - 1.0
+        change = changes[name]
         noise = max(s["cv"], b["cv"] or 0.0)
-        rows.append((name, b, s, raw, change, judge(change, noise, tolerance, s["cv"], max_cv)))
+        rows.append((name, b, s, raw, change, judge(change, noise, tolerance, s["cv"], max_cv, spread_floor)))
     if not filtered:  # a filtered run selects a subset; the rest are not missing
         for name in sorted(set(base) - set(stats)):
             rows.append((name, base[name], None, None, None, "missing"))
@@ -486,7 +505,7 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
            "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline,
            "counter_rows": counter_rows, "instr_tolerance": instr_tolerance, "environment_shift": environment_shift,
-           "tolerance": tolerance}
+           "tolerance": tolerance, "suite_spread": suite_spread}
     return rows, pair_rows, env
 
 
@@ -511,6 +530,9 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
                      " Pair ratios below are still meaningful without one.")
     else:
         lines.append(f"Judged {env['mode']}; tolerance {tolerance:.0%} or 3x the noise, whichever is larger.")
+        if env.get("suite_spread") is not None:
+            lines.append(f"No controls: suite spread {env['suite_spread']:.1%} used as an extra noise floor"
+                         f" (a change must also exceed 3x it, {3 * env['suite_spread']:.1%}).")
 
     def section(title, wanted):
         picked = [r for r in rows if r[5] in wanted]
@@ -583,6 +605,62 @@ def check_command(args):
     return 0 if args.report_only or not regressed else 1
 
 
+def extend_rounds(run, names, rounds, samples, meta, positions, counters):
+    """Adds `rounds` rounds measuring only `names`; the other benchmarks repeat their median so rounds stay aligned.
+
+    `run` has run_rounds' signature minus the process arguments, so a test can pass a stub that measures nothing.
+    """
+    for _ in range(rounds):
+        before = {n: len(v) for n, v in samples.items()}
+        run(sorted(names), 1, len(meta), samples, meta, positions, counters)
+        for n, v in samples.items():
+            if len(v) == before[n]:
+                v.append(statistics.median(v))
+                positions.setdefault(n, []).append(0.5)
+
+
+def regressions_in(evaluations):
+    """From evaluate() results [(rows, pair_rows, env)]: (every regressed name, the names to re-measure).
+
+    Covers benchmarks, pairs and counter rows. Re-measuring a pair needs its reference too.
+    """
+    flagged, remeasure = set(), set()
+    for rows, pair_rows, env in evaluations:
+        for r in rows:
+            if r[5] == "REGRESSED":
+                flagged.add(r[0])
+                remeasure.add(r[0])
+        for p in pair_rows:
+            if p[4] == "REGRESSED":
+                flagged.add(p[0])
+                remeasure |= {p[0], p[1]["reference"]}
+        for row in env["counter_rows"]:
+            if any(v.endswith("REGRESSED") for v in row["verdicts"]):
+                flagged.add(row["name"])
+                remeasure.add(row["name"])
+    return flagged, remeasure
+
+
+def confirm_regressions(evaluate_all, remeasure_rounds, confirm_rounds):
+    """Judges, and when something regressed re-measures just that and judges again with all rounds.
+
+    `evaluate_all()` returns the evaluate() results to inspect; `remeasure_rounds(names, n)` adds rounds.
+    Returns (first-pass regressions, regressions that persist).
+    """
+    first, remeasure = regressions_in(evaluate_all())
+    if not first or confirm_rounds <= 0:
+        return first, first
+    print(f"sub0perf: {len(first)} regression(s) on the first pass ({', '.join(sorted(first))});"
+          f" confirming with {confirm_rounds} more round(s) for {len(remeasure)} benchmark(s)", flush=True)
+    remeasure_rounds(remeasure, confirm_rounds)
+    final, _ = regressions_in(evaluate_all())
+    print(f"sub0perf: confirmed: {', '.join(sorted(first & final)) or 'none'}")
+    print(f"sub0perf: not confirmed: {', '.join(sorted(first - final)) or 'none'}")
+    if final - first:
+        print(f"sub0perf: also regressed after confirmation: {', '.join(sorted(final - first))}")
+    return first, final
+
+
 def auto_command(args):
     if os.environ.get("SUB0MATH_PERF_SKIP"):
         return 0  # the gate builds benchmarks itself and measures them once
@@ -608,6 +686,11 @@ def auto_command(args):
             if len(v) == before[n]:
                 v.append(statistics.median(v))
                 positions[n].append(0.5)
+    def rerun(names, n):
+        extend_rounds(lambda ns, r, first, *rest: run_rounds(args.exe, ns, r, args.epochs, args.max_load, args.settle, args.seed,
+                                                              first, *rest), names, n, samples, meta, positions, counters)
+    confirm_regressions(lambda: [evaluate(record, args.baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
+                                          bool(args.filter), args.instr_tolerance)], rerun, args.confirm_rounds)
     if args.out:
         write_samples(args.out, args.exe, samples, meta, positions, args.epochs, counters)
     if args.record and args.target:
@@ -721,11 +804,26 @@ def gate_command(args):
         record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(exe).name,
                   "epochs": args.epochs,
                   "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
-        save_record(repo, target, record)  # the record before push
         args.baseline = t["baseline"]
+        ref_sha, ref = reference_record(repo, target, upstream)
+
+        def both(record=record, ref=ref, baseline=t["baseline"]):
+            found = [evaluate(record, baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute, False,
+                              args.instr_tolerance)]
+            if ref:
+                found.append(evaluate(record, baseline_data(ref), args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
+                                      False, args.instr_tolerance))
+            return found
+
+        def rerun(names, n, exe=exe, samples=samples, meta=meta, positions=positions, counters=counters):
+            extend_rounds(lambda ns, r, first, *rest: run_rounds(exe, ns, r, args.epochs, args.max_load, args.settle, args.seed,
+                                                                  first, *rest), names, n, samples, meta, positions, counters)
+
+        # One noisy measurement never blocks a push: whatever regressed is re-measured, and only what persists counts.
+        confirm_regressions(both, rerun, args.confirm_rounds)
+        save_record(repo, target, record)  # the record before push (with any confirmation rounds)
         print("\n### Against the committed baseline\n")
         rows, pair_rows, regressed_base = report(record, args)
-        ref_sha, ref = reference_record(repo, target, upstream)
         regressed_ref = []
         if ref:
             print(f"\n### Against the local record of {ref_sha[:9]} (like for like on this machine)\n")
@@ -814,6 +912,8 @@ def main():
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--max-rounds", type=int, default=0, help="auto: total rounds allowed for noisy benchmarks (default 2x)")
     parser.add_argument("--epochs", type=int, default=0, help="override nanobench epochs (quicker, noisier)")
+    parser.add_argument("--confirm-rounds", type=int, default=4,
+                        help="auto, gate: extra rounds for just the benchmarks that regressed; only regressions that persist count (0 = off)")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--max-load", type=float, default=0.20, help="busy fraction of all CPUs above which a round waits")
     parser.add_argument("--settle", type=float, default=30.0, help="seconds to wait for load to fall")

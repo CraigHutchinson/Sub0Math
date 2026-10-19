@@ -83,7 +83,20 @@ Configuring a repository that builds benchmarks installs two git hooks, unless o
   - the record of the upstream commit, or of the nearest earlier commit with one, which is like for
     like on this machine.
 
-  Any regression blocks the push, with the exact command to accept it.
+  Any regression that persists blocks the push, with the exact command to accept it.
+
+  **Confirmation pass.** Three rounds are not enough evidence to block on. Whatever is judged
+  regressed on the first pass (a benchmark, a pair or a counter, against either comparison) is
+  measured again, alone with its pair references, for `--confirm-rounds` more interleaved rounds
+  (default 4, calibration as usual); both comparisons are then re-judged with all rounds. The gate
+  prints `confirmed:` and `not confirmed:` lists and blocks only on the former. `auto` does the same.
+
+  **No controls.** A repository without a hand-written benchmark cannot factor out environment shifts.
+  There, a change must also exceed 3x the suite's own spread of changes (median absolute deviation
+  across all benchmarks in that comparison): it is judged against
+  `max(tolerance, 3 x noise, 3 x suite spread)`, and the report says
+  `No controls: suite spread X% used as an extra noise floor`. Repositories with controls keep the
+  plain rule. The logic is covered by `python -m unittest discover -s tools/perf`.
 
 A regression is accepted only explicitly, and only in the baseline you push:
 
@@ -206,6 +219,7 @@ Separately, models should still snap settled states to exact zero where that is 
 | 2026-10-16 | Float decay into subnormals is about 100x slower; FTZ/DAZ restores normal speed | Scratch kernel on the development host (above) | Recorded for later adoption by the application; see Subnormal numbers |
 | 2026-10-16 | Passing blocks as `Aabb` corners costs about 30% against the hand-written reference, which takes centres from the grid index | Box-against-blocks pair | API changed: `AabbOverlapTester::overlapsCentred(centre, half)` for grid walks; the remaining gap is under Open gaps |
 | 2026-10-16 | nanobench 4.3.11 → 4.6.0 made the hand-written box-against-blocks reference about 11% faster (1,184–1,244 vs 1,362 ns); the vocabulary testers did not change, so their pair ratios rose from 0.95–0.98× to 1.06–1.09× | A/B: 4.6.0, 4.3.11, 4.6.0 again, 5 interleaved rounds each | The faster reference is the bar: open gap updated, baseline re-recorded with the reason logged |
+| 2026-10-19 | The pre-push gate blocked three pushes in a row in BikeDynamics, each time on a different benchmark and with no relevant code change: the repository has no hand-written controls, so environment shifts could not be factored out, and one 3-round measurement was enough to block | Gate logs: "Suspension analytical comparison", then "Terrain probe" | Confirmation pass (regressions re-measured for `--confirm-rounds` more rounds; only persisting ones block) and, without controls, a suite-spread noise floor (3x MAD of changes) |
 
 ## Measured (development host, GCC 16, -O3)
 
