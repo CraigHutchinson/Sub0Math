@@ -259,6 +259,18 @@ class PushedRefsTest(unittest.TestCase):
                                                     ("refs/heads/x", self.ZERO, "refs/heads/x", self.OTHER)])
         self.assertEqual(bc.parse_push_refs(""), [])
 
+    def test_documentation_only_pushes_are_not_measured(self):
+        update = [("refs/heads/main", self.HEAD, "refs/heads/main", self.OTHER)]
+        docs = lambda *_: ["README.md", "docs/DESIGN.md", "tools/perf/README.md", "LICENSE"]
+        code = lambda *_: ["README.md", "include/x.hpp"]
+        self.assertTrue(bc.documentation_only(update, docs))
+        self.assertFalse(bc.documentation_only(update, code))
+        self.assertFalse(bc.documentation_only(update, lambda *_: None))  # remote commit unknown: measure
+        new_branch = [("refs/heads/x", self.HEAD, "refs/heads/x", self.ZERO)]
+        self.assertFalse(bc.documentation_only(new_branch, docs))  # nothing to diff against: measure
+        self.assertFalse(bc.documentation_only([("refs/heads/x", self.ZERO, "refs/heads/x", self.OTHER)], docs))
+        self.assertFalse(bc.is_documentation("docsy/a.cpp"))
+
     def refs(self, *shas):
         return [(f"refs/heads/b{i}", sha, f"refs/heads/b{i}", self.ZERO) for i, sha in enumerate(shas)]
 

@@ -979,6 +979,30 @@ def push_problems(refs, head, clean, resolve=lambda sha: sha):
     return problems
 
 
+def is_documentation(path):
+    """True for files that no build reads: Markdown anywhere, anything under docs/, and licence files."""
+    name = path.rsplit("/", 1)[-1]
+    return path.endswith(".md") or path.startswith("docs/") or name.upper().startswith(("LICENSE", "LICENCE"))
+
+
+def documentation_only(refs, changed_paths):
+    """True when every pushed update changes only documentation, so measuring could only find noise.
+
+    `changed_paths(remote_sha, local_sha)` lists the files between two commits, or None when unknown (a new
+    branch, or a remote commit not present locally); unknown means measure.
+    """
+    pushed = [r for r in refs if set(r[1]) != ZERO_SHA_CHARS]
+    if not pushed:
+        return False
+    for _, local_sha, _, remote_sha in pushed:
+        if set(remote_sha) == ZERO_SHA_CHARS:
+            return False
+        paths = changed_paths(remote_sha, local_sha)
+        if paths is None or not all(is_documentation(p) for p in paths):
+            return False
+    return True
+
+
 def inconclusive_in(evaluations):
     """From evaluate() results: (every NOISY or ENVIRONMENT name, the names worth re-measuring).
 
@@ -1044,6 +1068,16 @@ def gate_command(args):
             print("  (SUB0MATH_PERF_SKIP=<reason> bypasses the gate and logs the reason; git push --no-verify skips all hooks)")
             log_event(repo, {"event": "gate-refused", "commit": head, "problems": problems})
             return 1
+
+        def changed_paths(remote_sha, local_sha):
+            out = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", "-z", remote_sha, local_sha],
+                                 capture_output=True, text=True)  # fails when the remote commit is not local
+            return [p for p in out.stdout.split("\0") if p] if out.returncode == 0 else None
+
+        if documentation_only(refs, changed_paths):
+            print("sub0perf: the push changes documentation only; nothing to measure")
+            log_event(repo, {"event": "skip", "commit": head, "reason": "documentation only"})
+            return 0
     try:
         with PerfLock(repo, "gate", args.lock_timeout):
             return run_gate(args, repo, d, config_path, head, clean)

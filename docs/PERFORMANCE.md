@@ -92,7 +92,10 @@ a hook prints a message and does nothing instead of failing.
   **What is measured is what is pushed.** The hook reads the refs git passes on stdin. It refuses the
   push, saying why, when tracked files have uncommitted changes (the build would include them), or when
   the commit being pushed for any ref (deletions excepted) is not the checked-out HEAD. A push that
-  only deletes refs is not measured. Otherwise the build is the pushed commit and the gate proceeds.
+  only deletes refs is not measured, and neither is one whose every update against the remote changes only
+  documentation (Markdown, `docs/`, licence files): measuring then could only find noise, and a bimodal
+  benchmark once blocked an AGENTS.md change. The skip is logged. A new branch, or a remote commit not
+  present locally, is always measured. Otherwise the build is the pushed commit and the gate proceeds.
   Run by hand (`bench_check.py gate`, without `--refs-from-stdin`) it only warns about a dirty tree.
 
   **Inconclusive results retry, then warn.** If the result includes NOISY or ENVIRONMENT verdicts
