@@ -1,0 +1,87 @@
+name: Upstream drift (reusable)
+
+# Reports what changed in an upstream repository since the commit recorded in the caller's provenance
+# manifest, as one open issue in the caller's repository, updated in place and closed when clear.
+# Repositories that record the same upstream files designate one owner (`driftOwner` in the manifest,
+# see tools/provenance/upstream_provenance.py); a non-owner raises no drift, so one upstream change
+# opens one issue. A private repository may call this public workflow.
+#
+# Caller (pin both refs to the same Sub0Math commit):
+#
+#   jobs:
+#     drift:
+#       uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@<sha>
+#       with:
+#         sub0math-ref: <sha>
+#         manifest: upstream/bikelab.json
+#       permissions: { contents: read, issues: write }
+
+on:
+  workflow_call:
+    inputs:
+      sub0math-ref:
+        description: Sub0Math commit or tag whose tools/provenance script is used (match the `uses:` ref)
+        type: string
+        required: true
+      manifest:
+        description: Provenance manifest in the calling repository
+        type: string
+        default: upstream/bikelab.json
+      upstream-ref:
+        description: Upstream ref to compare the recorded commit with
+        type: string
+        default: origin/main
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: CraigHutchinson/Sub0Math
+          ref: ${{ inputs.sub0math-ref }}
+          path: .sub0math
+          sparse-checkout: tools/provenance
+      - name: Read the manifest
+        id: manifest
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          echo "repository=$(jq -r '.repository | sub("https://github.com/"; "")' "$MANIFEST")" >> "$GITHUB_OUTPUT"
+          echo "name=$(jq -r '.name' "$MANIFEST")" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.manifest.outputs.repository }}
+          path: .upstream/checkout
+          fetch-depth: 0
+      - name: Check ported commit and blobs
+        run: python3 .sub0math/tools/provenance/upstream_provenance.py check --manifest "${{ inputs.manifest }}" --upstream-dir .upstream/checkout
+      - name: Compare with upstream
+        id: drift
+        run: |
+          python3 .sub0math/tools/provenance/upstream_provenance.py drift --manifest "${{ inputs.manifest }}" \
+            --upstream-dir .upstream/checkout --ref "${{ inputs.upstream-ref }}" --report upstream-drift.md
+          cat upstream-drift.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Open, update or close the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT: ${{ steps.drift.outputs.drift }}
+          NAME: ${{ steps.manifest.outputs.name }}
+        run: |
+          title="Upstream drift: $NAME"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ "$DRIFT" = "true" ]; then
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file upstream-drift.md
+            else
+              gh issue create --title "$title" --body-file upstream-drift.md
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "No drift: every ported file this repository owns and every watched path is unchanged."
+          fi

@@ -25,6 +25,8 @@ jobs:
           python-version: "3.12"
       - name: Unit tests (tools/perf)
         run: python -m unittest discover -s tools/perf -v
+      - name: Unit tests (tools/provenance)
+        run: python -m unittest discover -s tools/provenance -v
 
   build-linux:
     name: build-linux (${{ matrix.compiler }})
