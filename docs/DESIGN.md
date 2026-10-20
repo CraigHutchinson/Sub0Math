@@ -68,6 +68,7 @@ using RetryCount = sub0math::Role<struct RetryCountTag, std::uint32_t>;
 - `Quat<T>`: unit quaternion rotations; `rotate` works on vectors of numbers or quantities.
 - `RigidTransform<T, L>`: rotation then translation; `L` is the position type (`f64::Length` for physics).
 - `Aabb<T, N>`: inclusive axis-aligned boxes.
+- Vectors convert at unit boundaries with `toSi(v)` and `fromSi<Q>(v)` (plain SI numbers and back) and answer `isFinite(v)`.
 - **Spatial algebra** for rigid-body dynamics (Featherstone's 6D vectors), added for Sub0Physics'
   multibody core (ADR 0003, step M1a) and grown by use like the shapes:
   - `SpatialMotion<T>` (velocities, accelerations, joint axes) and `SpatialForce<T>` (forces, momenta)
@@ -79,7 +80,8 @@ using RetryCount = sub0math::Role<struct RetryCountTag, std::uint32_t>;
   - `PluckerTransform<T>` (Featherstone's `B_X_A`: rotation `E` and translation `r`) is made from a
     `RigidTransform` pose and applies to motions as `X`, to forces as the dual `X*`, and in reverse
     (`applyInverse`: `X^-1` for motions, `X^T` for forces, `X^T I X` for inertias). Composition and
-    `inverse` follow `RigidTransform`.
+    `inverse` follow `RigidTransform`. `toRigidTransform(x)` recovers the pose (using
+    `Quat::fromRotationMatrix`, Shepperd's method), so a pose can be composed in either form.
   - Components are plain SI numbers, like `Mat`: one type carries velocities, accelerations and unit
     axes, so units belong to the interfaces that build them. Use double for dynamics.
 
@@ -98,7 +100,7 @@ needs them, and the API is refined by using it (ADR 0002).
 | `Plane<T, N>` | `signedDistance`, `closestPoint`, `Plane::through` | Ground and ramp references |
 | `Triangle<T, N>` | `closestPoint` reporting the vertex, edge or face it lies on; `normal`; `boundingBox` | Exact terrain height queries |
 | `Ray<T, N>` | `intersect` with `Triangle` (Moller–Trumbore) and `Plane` | Rays along a wheel's support normal |
-| `RegularGrid<T, N>` | `nodeAt`, `cellOf`, `cellsOverlapping` | Terrain pages and coverage blocks |
+| `RegularGrid<T, N>` | `nodeAt`; ownership `cellOf` (half-open, far edge clamps, returns `GridCell{index, known}`); coverage `cellsTouching(Aabb)` (closed: touching counts). Non-finite or out-of-range input gives `known == false` or an empty range, never an integer conversion | Terrain pages and coverage blocks |
 
 Directions (`Plane::normal`, `Ray::direction`, box axes) are plain unit vectors; only positions and
 extents carry the coordinate unit, so a length can never be passed as a direction. The shapes added on
@@ -111,6 +113,8 @@ triangles will be a function (`toMesh(shape, ...)`), not a type. Purposes that c
 
 - Everything is `constexpr` where the standard library allows, `noexcept`, trivially copyable and the size
   of its components; static assertions pin it.
+- Floating-point results must not depend on whether the build has FMA: tests and benchmarks use
+  `sub0math_target_deterministic_fp` (see [PERFORMANCE.md](PERFORMANCE.md#floating-point-determinism)).
 - Paired benchmarks prove that quantities cost the same as plain numbers (`dot, double` vs
   `dot, f64::Length`); budgets per host catch regressions. See [PERFORMANCE.md](PERFORMANCE.md).
 - No hand-written SIMD yet: named-component vectors in arrays vectorize well (the float axpy benchmark

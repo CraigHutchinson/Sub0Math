@@ -120,6 +120,28 @@ Baselines in the older format (a number per benchmark) are still read, judged ag
 median drift, and should be re-recorded. CI uses `--report-only` against `github-ubuntu` and writes
 the report to the job summary, because shared runners are noisy.
 
+## Floating-point determinism
+
+Parity tests and replay need the same bits from every build. The compiler can break that by fusing
+`a * b + c` into one fused multiply-add (FMA), which rounds once instead of twice. Fusing is allowed by
+default in some places: GCC in gnu mode (`-std=gnu++23`, the CMake default unless `CXX_EXTENSIONS OFF`)
+uses `-ffp-contract=fast`, and any build with FMA hardware enabled (`-march=native`,
+`SUB0MATH_NATIVE_ARCH`, `-march=x86-64-v3`, `/arch:AVX2`) then fuses. The same source gives different
+results with and without it.
+
+```cmake
+sub0math_target_deterministic_fp(MyLibrary_Tests)             # PRIVATE: this target's own translation units
+sub0math_target_deterministic_fp(MyLibrary INTERFACE)         # header-only: every consumer inherits it
+```
+
+The helper adds `-ffp-contract=off` (GCC, Clang) or `/fp:precise` (MSVC; clang-cl gets `/fp:precise` and
+`/clang:-ffp-contract=off`). Scope defaults to `PRIVATE`. Sub0Math applies it to its own tests and
+benchmarks; a library whose inline headers are compiled in consumers' targets exports it as `INTERFACE`.
+The cost is the speed FMA would give, so a deliberate performance experiment with
+`SUB0MATH_NATIVE_ARCH` can leave it off, but then compares nothing against goldens. CI has one leg that
+builds the tests with `-march=x86-64-v3` (FMA available) and must still pass. Turning the helper on in a
+repository moves its timings: re-record the baselines deliberately, with the reason.
+
 ## Profiling
 
 Build with the `profile` preset (optimised, debug info, frame pointers), then:
@@ -223,6 +245,7 @@ Separately, models should still snap settled states to exact zero where that is 
 | 2026-10-19 | The pre-push gate blocked three pushes in a row in BikeDynamics, each time on a different benchmark and with no relevant code change: the repository has no hand-written controls, so environment shifts could not be factored out, and one 3-round measurement was enough to block | Gate logs: "Suspension analytical comparison", then "Terrain probe" | Confirmation pass (regressions re-measured for `--confirm-rounds` more rounds; only persisting ones block) and, without controls, a suite-spread noise floor (3x MAD of changes) |
 | 2026-10-19 | Spatial algebra: carrying an inertia to a parent frame (`X^T I X`) computed the full 3x3 `E^T I E`; the hand-written reference computes the six symmetric entries | Pair `inertia to parent x1024`: 1.15x, then 1.02x (5 interleaved rounds) | `applyInverse(SpatialInertia)` computes the upper triangle and mirrors it |
 | 2026-10-19 | `PluckerTransform` apply/applyInverse runs 0.82x of hand-written scalar code: GCC 16 SLP-vectorises the column-sum form (`Mat * Vec`) but not the scalar expressions, even with stores deferred | Pair `spatial transform x1024`, vectorization remarks | The vocabulary is the fastest form known here; the scalar reference stays as the plain-numbers control |
+| 2026-10-20 | Grid ownership (`cellOf`) with `std::optional`-free `GridCell{index, known}` and a coverage query that clamps in floating point before converting: both at parity with plain scalar code on 1024 inputs, one in six outside the grid | Pairs `grid cellOf x1024` 1.01-1.04x, `grid cellsTouching x1024` 0.99-1.08x (7 interleaved rounds, noisy host) | One deferred finite test in `cellsTouching` (a branch per axis measured 1.08x); bitwise-or of the range tests in `cellOf` |
 
 ## Measured (development host, GCC 16, -O3)
 
@@ -238,6 +261,8 @@ Separately, models should still snap settled states to exact zero where that is 
 | box vs 1024 blocks: hand-written (centres from index) / tester (centre, half) / tester (Aabb corners) | 921 / 1022 / 1309 |
 | spatial transform (motion `X m` and force `X^T f`), hand-written scalars / `PluckerTransform` | 8031 / 6716; pair 0.82x |
 | inertia to parent frame `X^T I X`, hand-written scalars / `PluckerTransform::applyInverse` | 13105 / 13296; pair 1.02x |
+| grid `cellOf` x1024, hand-written scalars / `RegularGrid<f64::Length>::cellOf` | pair 1.01-1.04x |
+| grid `cellsTouching` x1024, hand-written scalars / `RegularGrid<f64::Length>::cellsTouching` | pair 0.99-1.08x |
 
 Timings vary by a few percent run to run on a shared desktop; compare pairs measured together, and use
 best-of-N when judging a change.

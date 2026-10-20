@@ -3,6 +3,7 @@
 #include <bench_runner.hpp>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "sub0math/sub0math.hpp"
@@ -265,6 +266,80 @@ void benchBoxBlocks(sub0bench::BenchRunner& runner)
     });
 }
 
+// Grid indexing: owning cell of 1024 points and the cells touched by 1024 boxes, on a 64 x 64 cell grid
+// (4 cm). About one input in six lies outside the grid, so the unknown path is timed too. The hand-written
+// versions are plain scalar code with the same rules and the same refusal of non-finite input.
+void benchGrid(sub0bench::BenchRunner& runner)
+{
+    constexpr double ox = -0.5, oy = 0.25, spacing = 0.04;
+    constexpr int cells = 64;
+    std::vector<Point<f64::Length, 2>> points;
+    std::vector<Aabb<f64::Length, 2>> boxes;
+    std::vector<double> px, py, bx0, by0, bx1, by1;
+    std::uint32_t state = 12345U;
+    const auto uniform = [&state] {
+        state = state * 1664525U + 1013904223U;
+        return static_cast<double>(state >> 8) / static_cast<double>(1U << 24);
+    };
+    for (std::size_t i = 0; i < Count; ++i)
+    {
+        const double x = ox - 0.4 + uniform() * (cells * spacing + 0.8);
+        const double y = oy - 0.4 + uniform() * (cells * spacing + 0.8);
+        const double w = uniform() * 0.3, h = uniform() * 0.3;
+        px.push_back(x);
+        py.push_back(y);
+        bx0.push_back(x);
+        by0.push_back(y);
+        bx1.push_back(x + w);
+        by1.push_back(y + h);
+        points.push_back({metres(x), metres(y)});
+        boxes.push_back({{metres(x), metres(y)}, {metres(x + w), metres(y + h)}});
+    }
+
+    runner.run("grid cellOf x1024, hand-written scalars", [&] {
+        long sum = 0;
+        for (std::size_t i = 0; i < Count; ++i)
+        {
+            const double ux = (px[i] - ox) / spacing, uy = (py[i] - oy) / spacing;
+            if (!(ux >= 0.0) || ux > cells || !(uy >= 0.0) || uy > cells) continue;
+            sum += std::min(static_cast<int>(std::floor(ux)), cells - 1) +
+                   65536L * std::min(static_cast<int>(std::floor(uy)), cells - 1) + 1;
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+    const RegularGrid<f64::Length, 2> grid{{metres(ox), metres(oy)}, metres(spacing), {cells + 1, cells + 1}};
+    runner.run("grid cellOf x1024, RegularGrid<f64::Length>::cellOf", [&] {
+        long sum = 0;
+        for (std::size_t i = 0; i < Count; ++i)
+        {
+            const GridCell<2> cell = grid.cellOf(points[i]);
+            if (cell) sum += cell.index[0] + 65536L * cell.index[1] + 1;
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+
+    runner.run("grid cellsTouching x1024, hand-written scalars", [&] {
+        long sum = 0;
+        for (std::size_t i = 0; i < Count; ++i)
+        {
+            const double lx = (bx0[i] - ox) / spacing, hx = (bx1[i] - ox) / spacing;
+            const double ly = (by0[i] - oy) / spacing, hy = (by1[i] - oy) / spacing;
+            if (!(std::isfinite(lx) && std::isfinite(hx) && std::isfinite(ly) && std::isfinite(hy))) continue;
+            const int x0 = static_cast<int>(std::max(0.0, std::min(std::ceil(lx) - 1.0, double{cells})));
+            const int y0 = static_cast<int>(std::max(0.0, std::min(std::ceil(ly) - 1.0, double{cells})));
+            const int x1 = static_cast<int>(std::max(-1.0, std::min(std::floor(hx), cells - 1.0)));
+            const int y1 = static_cast<int>(std::max(-1.0, std::min(std::floor(hy), cells - 1.0)));
+            sum += (x1 >= x0 && y1 >= y0) ? static_cast<long>(x1 - x0 + 1) * (y1 - y0 + 1) : 0L;
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+    runner.run("grid cellsTouching x1024, RegularGrid<f64::Length>::cellsTouching", [&] {
+        long sum = 0;
+        for (std::size_t i = 0; i < Count; ++i) sum += grid.cellsTouching(boxes[i]).count();
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+}
+
 // Support-projected sampling: a ray along -n against every triangle of the page. Hand-written
 // Moller-Trumbore on doubles, then intersect(Ray<f64::Length, 3>, Triangle).
 void benchRayTriangle(sub0bench::BenchRunner& runner)
@@ -461,6 +536,7 @@ int main(int argc, char** argv)
     benchTriangleClosest(runner);
     benchBoxBlocks(runner);
     benchRayTriangle(runner);
+    benchGrid(runner);
     benchSpatialTransform(runner);
     return runner.finish();
 }

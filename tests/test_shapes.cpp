@@ -1,5 +1,10 @@
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <doctest.h>
+#include <limits>
+#include <type_traits>
+#include <vector>
 
 #include "sub0math/geometry.hpp"
 #include "sub0math/units.hpp"
@@ -166,24 +171,164 @@ TEST_CASE("Ray against triangle and plane")
     CHECK(t->in(metres) == doctest::Approx(1.0));
 }
 
-TEST_CASE("Regular grid: nodes, cells and overlapped ranges")
+TEST_CASE("Regular grid: nodes and cell ownership")
 {
     using namespace sub0math::f64::literals;
     const RegularGrid<L, 2> page{{0_m, 0_m}, 10_mm, {257, 257}}; // 256 x 256 cells, 2.56 m
     CHECK(page.nodeAt({256, 0}).x.in(metres) == doctest::Approx(2.56));
 
-    const auto cell = page.cellOf({15_mm, 2.555_m});
+    const GridCell<2> cell = page.cellOf({15_mm, 2.555_m});
     REQUIRE(cell);
-    CHECK((*cell)[0] == 1);
-    CHECK((*cell)[1] == 255);
-    CHECK(page.cellOf({2.56_m, 2.56_m}) == GridIndex<2>{255, 255}); // far corner: last cell
+    CHECK(cell.index == GridIndex<2>{1, 255});
+    const GridCell<2> corner = page.cellOf({2.56_m, 2.56_m});
+    REQUIRE(corner.known); // far corner: last cell
+    CHECK(corner.index == GridIndex<2>{255, 255});
     CHECK_FALSE(page.cellOf({-1_mm, 0_m}));
     CHECK_FALSE(page.cellOf({0_m, 2.57_m}));
+    CHECK(page.cellOf({-1_mm, 0_m}).index == GridIndex<2>{0, 0});
 
-    const auto range = page.cellsOverlapping(Aabb<L, 2>{{-1_m, 25_mm}, {35_mm, 25_mm}});
+    static_assert(!std::is_convertible_v<GridCell<2>, bool>); // explicit only
+    static_assert(std::is_aggregate_v<GridCell<2>>);
+    static_assert(std::is_trivially_copyable_v<GridCell<2>>);
+}
+
+TEST_CASE("Regular grid: ownership is half-open and the far edge clamps")
+{
+    const RegularGrid<double, 2> grid{{1.0, -2.0}, 0.5, {5, 3}}; // 4 x 2 cells: x in [1, 3], y in [-2, -1]
+    const auto at = [&](double x, double y) { return grid.cellOf({x, y}); };
+
+    CHECK(at(1.0, -2.0).index == GridIndex<2>{0, 0});  // lower corner: first cell
+    CHECK(at(1.5, -1.5).index == GridIndex<2>{1, 1});  // interior node: the cell above it
+    CHECK(at(1.4999999999999998, -1.5).index[0] == 0); // just below a node: the cell below
+    CHECK(at(3.0, -1.0).index == GridIndex<2>{3, 1});  // far corner: last cell
+    CHECK(at(3.0, -1.5).index == GridIndex<2>{3, 1});  // far x edge only
+    CHECK_FALSE(at(0.9999999999999999, -2.0));         // just before the origin
+    CHECK_FALSE(at(3.0000000000000004, -1.0));         // just past the far edge
+    CHECK_FALSE(at(1.0, -0.999999999999));
+}
+
+TEST_CASE("Regular grid: non-finite and huge input is never converted to an integer")
+{
+    constexpr double Nan = std::numeric_limits<double>::quiet_NaN();
+    constexpr double Inf = std::numeric_limits<double>::infinity();
+    const RegularGrid<double, 2> grid{{0.0, 0.0}, 1.0, {11, 11}};
+    for (const double bad : {Nan, Inf, -Inf, 1e30, -1e30, 1e300, -1e300, std::numeric_limits<double>::max()})
+    {
+        INFO(bad);
+        CHECK_FALSE(grid.cellOf({bad, 5.0}));
+        CHECK_FALSE(grid.cellOf({5.0, bad}));
+        CHECK(grid.cellOf({bad, bad}).index == GridIndex<2>{0, 0});
+    }
+    for (const double bad : {Nan, Inf, -Inf})
+    {
+        INFO(bad);
+        CHECK(grid.cellsTouching(Aabb<double, 2>{{bad, 1.0}, {2.0, 2.0}}).empty());
+        CHECK(grid.cellsTouching(Aabb<double, 2>{{1.0, 1.0}, {2.0, bad}}).empty());
+        CHECK(grid.cellsTouching(Aabb<double, 2>{{1.0, bad}, {bad, 2.0}}).empty());
+    }
+    // Finite but huge boxes clamp to the grid instead of overflowing the conversion.
+    const GridRange<2> all = grid.cellsTouching(Aabb<double, 2>{{-1e300, -1e300}, {1e300, 1e300}});
+    CHECK(all.lo == GridIndex<2>{0, 0});
+    CHECK(all.hi == GridIndex<2>{9, 9});
+    CHECK(grid.cellsTouching(Aabb<double, 2>{{1e300, 0.0}, {1e301, 1.0}}).empty());
+    CHECK(grid.cellsTouching(Aabb<double, 2>{{-1e301, 0.0}, {-1e300, 1.0}}).empty());
+
+    const RegularGrid<float, 2> narrow{{0.0F, 0.0F}, 1.0F, {11, 11}}; // float overflows sooner
+    CHECK_FALSE(narrow.cellOf({3.0e38F, 1.0F}));
+    CHECK(narrow.cellsTouching(Aabb<float, 2>{{-3.0e38F, 0.0F}, {3.0e38F, 1.0F}}).hi == GridIndex<2>{9, 1});
+
+    const RegularGrid<double, 2> degenerate{{0.0, 0.0}, 1.0, {1, 0}}; // no cells at all
+    CHECK_FALSE(degenerate.cellOf({0.0, 0.0}));
+    CHECK(degenerate.cellsTouching(Aabb<double, 2>{{-1.0, -1.0}, {1.0, 1.0}}).empty());
+}
+
+TEST_CASE("Regular grid: coverage is closed and equals brute force on every boundary")
+{
+    // 5 x 4 cells, origin (-1, 0.5), spacing 0.5: nodes and all test corners are multiples of 0.5 (exact in
+    // binary), so corners fall on, between and beyond nodes.
+    const RegularGrid<double, 2> grid{{-1.0, 0.5}, 0.5, {6, 5}};
+    std::vector<double> coords;
+    for (int k = -8; k <= 12; ++k) coords.push_back(0.5 * k);
+
+    // A cell [a, b] is touched by the closed interval [lo, hi] iff lo <= b and hi >= a.
+    const auto expected = [](double lo, double hi, double origin, int cells, int& first, int& last) {
+        first = cells;
+        last = -1;
+        for (int c = 0; c < cells; ++c)
+        {
+            const double a = origin + 0.5 * c;
+            const double b = a + 0.5;
+            if (lo <= b && hi >= a)
+            {
+                first = std::min(first, c);
+                last = c;
+            }
+        }
+    };
+    std::size_t boxes = 0;
+    for (const double xlo : coords)
+    {
+        for (const double xhi : coords)
+        {
+            if (xhi < xlo) continue;
+            int fx = 0;
+            int lx = 0;
+            expected(xlo, xhi, -1.0, 5, fx, lx);
+            for (const double ylo : coords)
+            {
+                for (const double yhi : coords)
+                {
+                    if (yhi < ylo) continue;
+                    int fy = 0;
+                    int ly = 0;
+                    expected(ylo, yhi, 0.5, 4, fy, ly);
+                    const GridRange<2> r = grid.cellsTouching(Aabb<double, 2>{{xlo, ylo}, {xhi, yhi}});
+                    ++boxes;
+                    if (lx < 0 || ly < 0)
+                    {
+                        if (!r.empty()) FAIL("expected empty for ", xlo, ' ', ylo, ' ', xhi, ' ', yhi);
+                    }
+                    else if (r.lo != GridIndex<2>{fx, fy} || r.hi != GridIndex<2>{lx, ly})
+                    {
+                        FAIL("range mismatch for ", xlo, ' ', ylo, ' ', xhi, ' ', yhi);
+                    }
+                }
+            }
+        }
+    }
+    CHECK(boxes > 20000);
+}
+
+TEST_CASE("Regular grid: coverage named cases")
+{
+    using namespace sub0math::f64::literals;
+    const RegularGrid<L, 2> page{{0_m, 0_m}, 10_mm, {257, 257}};
+    const auto range = page.cellsTouching(Aabb<L, 2>{{-1_m, 25_mm}, {35_mm, 25_mm}});
     CHECK(range.lo == GridIndex<2>{0, 2});
     CHECK(range.hi == GridIndex<2>{3, 2});
     CHECK(range.count() == 4);
-    CHECK(page.cellsOverlapping(Aabb<L, 2>{{3_m, 0_m}, {4_m, 1_m}}).empty());
-    CHECK(page.cellsOverlapping(Aabb<L, 2>{{-5_m, -5_m}, {5_m, 5_m}}).count() == 256 * 256);
+    CHECK(page.cellsTouching(Aabb<L, 2>{{3_m, 0_m}, {4_m, 1_m}}).empty());
+    CHECK(page.cellsTouching(Aabb<L, 2>{{-5_m, -5_m}, {5_m, 5_m}}).count() == 256 * 256);
+
+    const RegularGrid<double, 2> g{{0.0, 0.0}, 1.0, {5, 5}}; // 4 x 4 cells
+    const auto box = [&](double x0, double y0, double x1, double y1) {
+        return g.cellsTouching(Aabb<double, 2>{{x0, y0}, {x1, y1}});
+    };
+    // Touching the lower edge from outside includes the first cell; so does touching the far edge the last.
+    CHECK(box(-2.0, 1.5, 0.0, 1.5).lo == GridIndex<2>{0, 1});
+    CHECK(box(-2.0, 1.5, 0.0, 1.5).hi == GridIndex<2>{0, 1});
+    CHECK(box(4.0, 1.5, 6.0, 1.5).lo == GridIndex<2>{3, 1});
+    CHECK(box(4.0, 1.5, 6.0, 1.5).hi == GridIndex<2>{3, 1});
+    CHECK(box(-2.0, 1.5, -0.0000001, 1.5).empty());
+    CHECK(box(4.0000001, 1.5, 6.0, 1.5).empty());
+    // A point on an interior node touches all four incident cells.
+    const auto node = box(2.0, 2.0, 2.0, 2.0);
+    CHECK(node.lo == GridIndex<2>{1, 1});
+    CHECK(node.hi == GridIndex<2>{2, 2});
+    // A box edge on a boundary includes both sides; strictly inside it stays within one cell.
+    CHECK(box(1.0, 0.5, 2.0, 0.5).count() == 3);
+    CHECK(box(1.25, 0.5, 1.75, 0.5).count() == 1);
+    // The corner node of the grid belongs to a single cell.
+    CHECK(box(0.0, 0.0, 0.0, 0.0).count() == 1);
+    CHECK(box(4.0, 4.0, 4.0, 4.0).count() == 1);
 }
