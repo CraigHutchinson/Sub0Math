@@ -470,6 +470,23 @@ class HooksTest(RepoTestCase):
         self.assertIn("--refs-from-stdin", first)
         self.assertTrue((self.hooks_dir() / "post-checkout").is_file())
 
+    def test_reinstall_leaves_an_unchanged_running_hook_alone(self):
+        self.install()
+        original = bc.atomic_write_text
+
+        def refuse_hooks(path, text):
+            if Path(path).parent == self.hooks_dir():
+                raise PermissionError("in use")  # what Windows does to a running hook
+            original(path, text)
+
+        bc.atomic_write_text = refuse_hooks
+        try:
+            self.install()  # unchanged hooks are skipped, so nothing is replaced
+            (self.hooks_dir() / "pre-push").write_text("# stale ours " + bc.HOOK_MARK + "\n", encoding="utf-8")
+            self.install()  # a changed one that cannot be replaced is reported, not raised
+        finally:
+            bc.atomic_write_text = original
+
     def test_foreign_hook_is_kept_and_chained_with_stdin_and_arguments(self):
         hooks = self.hooks_dir()
         hooks.mkdir(parents=True, exist_ok=True)

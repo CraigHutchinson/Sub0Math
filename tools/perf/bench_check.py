@@ -1187,7 +1187,14 @@ def install_hooks_command(args):
                 continue
             os.replace(path, previous)
             print(f"sub0perf: kept your {name} hook as {previous.name}; the installed hook runs it first")
-        atomic_write_text(path, hook_body(name, python, script, comment))
+        body = hook_body(name, python, script, comment)
+        if path.is_file() and path.read_text(encoding="utf-8", errors="replace") == body:
+            continue  # unchanged; Windows refuses to replace a hook that is running (a gate's own build)
+        try:
+            atomic_write_text(path, body)
+        except PermissionError as error:
+            print(f"sub0perf: could not update {path} ({error}); it is probably running, and the next configure retries")
+            continue
         try:
             path.chmod(0o755)
         except OSError:
