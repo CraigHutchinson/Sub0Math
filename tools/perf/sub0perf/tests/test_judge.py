@@ -67,6 +67,47 @@ class JudgingTest(unittest.TestCase):
                                               "baseline", 0.10, 0.05))
 
 
+class BimodalTest(unittest.TestCase):
+    """A benchmark that runs at one of two levels from process to process is inconclusive, not regressed."""
+
+    def setUp(self):
+        self.base = {"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, hand-written": 500.0, "H, vocab": 500.0}
+        self.baseline = baseline_data(record(self.base))
+
+    def judge(self, vocab_samples):
+        rec = record(self.base, jitter=0.002)
+        rec["samples"]["G, vocab"] = vocab_samples
+        rows, pairs, env = judge.evaluate(rec, self.baseline, 0.10, 0.05, 0.05, False)
+        return {r[0]: r[5] for r in rows}["G, vocab"], {p[0]: p[4] for p in pairs}["G, vocab"]
+
+    def test_one_level_moving_is_noisy_not_regressed(self):
+        # Baseline 1000. Samples at 1000 and 1150 (five rounds): the median is in the slow level (+15%) but the fast level is the baseline.
+        verdict, _ = self.judge([1000.0, 1002.0, 1150.0, 1155.0, 1152.0])
+        self.assertEqual(verdict, "NOISY")
+
+    def test_both_levels_moving_is_still_a_regression(self):
+        verdict, _ = self.judge([1300.0, 1302.0, 1450.0, 1455.0, 1452.0])
+        self.assertEqual(verdict, "REGRESSED")
+
+    def test_one_level_faster_is_not_an_improvement(self):
+        verdict, _ = self.judge([1000.0, 1002.0, 850.0, 852.0, 848.0])
+        self.assertEqual(verdict, "NOISY")
+
+    def test_a_steady_regression_is_unaffected(self):
+        verdict, pair = self.judge([1300.0, 1305.0, 1297.0, 1302.0, 1299.0])
+        self.assertEqual((verdict, pair), ("REGRESSED", "REGRESSED"))
+
+    def test_the_pair_ratio_of_a_bimodal_benchmark_is_noisy(self):
+        _, pair = self.judge([1000.0, 1002.0, 1150.0, 1155.0, 1152.0])
+        self.assertEqual(pair, "NOISY")
+
+    def test_report_marks_bimodal_rows(self):
+        rec = record(self.base, jitter=0.002)
+        rec["samples"]["G, vocab"] = [1000.0, 1002.0, 1150.0, 1155.0, 1152.0]
+        rows, pairs, env = judge.evaluate(rec, self.baseline, 0.10, 0.05, 0.05, False)
+        self.assertIn("bimodal", report.render(rows, pairs, env, "b.json", 0.10, 0.05))
+
+
 class MethodMismatchTest(unittest.TestCase):
     def method(self, record_cpu, baseline_cpu):
         times = {"G, hand-written": 1000.0, "G, vocab": 1000.0}

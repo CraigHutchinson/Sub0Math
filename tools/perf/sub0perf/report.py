@@ -39,14 +39,14 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
         lines.append("| Benchmark | Baseline ns | Now ns | Raw | Judged | Spread | Verdict |")
         lines.append("|---|---:|---:|---:|---:|---:|---|")
         for name, b, s, raw, change, v in picked:
-            spread = "-" if not s else format(s["cv"], ".1%")
+            spread = "-" if not s else format(s["cv"], ".1%") + (" bimodal" if s.get("modes") else "")
             base_ns = num(b["median_ns"] if b else None)
             now_ns = num(s["median_ns"] if s else None)
             lines.append(f"| {name} | {base_ns} | {now_ns} | {pct(raw)} | {pct(change)} | {spread} | {v} |")
 
     section("Regressions", {"REGRESSED"})
     section("Progressions (record them: run the baseline target and commit it, saying why)", {"IMPROVED"})
-    section("Inconclusive: too noisy to judge", {"NOISY"})
+    section("Inconclusive: too noisy to judge, or at two timing levels (bimodal)", {"NOISY"})
     section("Inconclusive: the environment shifted beyond the tolerance (see the controls); pairs and counters still judge",
             {"ENVIRONMENT"})
     section("Unchanged, new or missing", {"ok", "new", "missing"})
@@ -75,7 +75,7 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
         for name, p, bp, change, v in pair_rows:
             base_ratio = "-" if not bp else format(bp["ratio"], ".3f") + "x"
             instr = format(p["instruction_ratio"], ".3f") + "x" if "instruction_ratio" in p else "-"
-            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%} | {instr} | {v} |")
+            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%}{' bimodal' if p.get('modes') else ''} | {instr} | {v} |")
     return "\n".join(lines)
 
 

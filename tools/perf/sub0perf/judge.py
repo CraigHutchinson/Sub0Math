@@ -8,16 +8,40 @@ from .common import REFERENCE_MARK, read_json
 from .stats import pair_ratios, summarise
 
 
+def threshold(noise, tolerance, spread=0.0):
+    """How far a change must go to count: the tolerance, or three times the noise or the suite's spread."""
+    return max(tolerance, 3.0 * noise, 3.0 * spread)
+
+
 def judge(change, noise, tolerance, cv, max_cv, spread=0.0):
     """Verdict for a change. `spread` is the suite's own spread of changes, used only where there are no controls."""
     if cv > max_cv:
         return "NOISY"
-    threshold = max(tolerance, 3.0 * noise, 3.0 * spread)
-    if change > threshold:
+    limit = threshold(noise, tolerance, spread)
+    if change > limit:
         return "REGRESSED"
-    if change < -threshold:
+    if change < -limit:
         return "IMPROVED"
     return "ok"
+
+
+def judge_modes(verdict, modes, reference, limit):
+    """Demotes a REGRESSED or IMPROVED verdict to NOISY when the samples sit at two levels and only one level moved.
+
+    `modes` is stats.modes() of the samples (None when they are not bimodal); `reference` is what they are compared
+    with (the baseline value at the current clock, or the baseline ratio) and `limit` the change that counts.
+    A regression needs the fast level to be slower than the reference by more than the limit, an improvement the
+    slow level to be faster: a shift of one level between processes is a bimodal benchmark, not a change. Both
+    levels moving is a real change and keeps its verdict.
+    """
+    if modes is None or reference <= 0:
+        return verdict
+    low, high, _ = modes
+    if verdict == "REGRESSED" and low / reference - 1.0 <= limit:
+        return "NOISY"
+    if verdict == "IMPROVED" and high / reference - 1.0 >= -limit:
+        return "NOISY"
+    return verdict
 
 
 def _inconclusive(rows):
@@ -82,7 +106,9 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
         raw = s["median_ns"] / b["median_ns"] - 1.0
         change = changes[name]
         noise = max(s["cv"], b["cv"] or 0.0)
-        rows.append((name, b, s, raw, change, judge(change, noise, tolerance, s["cv"], max_cv, spread_floor)))
+        verdict = judge(change, noise, tolerance, s["cv"], max_cv, spread_floor)
+        verdict = judge_modes(verdict, s["modes"], b["median_ns"] * factor, threshold(noise, tolerance, spread_floor))
+        rows.append((name, b, s, raw, change, verdict))
     # When the controls (which do not use the library) moved by more than the tolerance, the environment
     # changed too much for absolute times to support a verdict either way: report them as ENVIRONMENT
     # (inconclusive). Pair ratios and instruction counts are relative to the same environment and still judge.
@@ -114,6 +140,7 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
         if bp:
             change = p["ratio"] / bp["ratio"] - 1.0
             verdict = judge(change, p["cv"], pair_tolerance, p["cv"], max_cv)
+            verdict = judge_modes(verdict, p["modes"], bp["ratio"], threshold(p["cv"], pair_tolerance))
         else:
             change, verdict = None, "new"
         pair_rows.append((name, p, bp, change, verdict))

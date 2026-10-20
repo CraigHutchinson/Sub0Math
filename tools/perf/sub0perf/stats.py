@@ -13,6 +13,38 @@ def robust_cv(values):
     return 1.4826 * mad / m if m else 0.0
 
 
+BIMODAL_MIN_GAP = 0.02    # the two levels differ by at least this fraction of the median
+BIMODAL_GAP_SPREADS = 4.0  # ... and by this many within-level standard deviations
+BIMODAL_FLOOR = 0.003      # within-level spread is never taken as less than this fraction of the median
+
+
+def modes(values):
+    """Detects two timing levels: returns (low median, high median, gap as a fraction of the median) or None.
+
+    Some benchmarks run at one of two levels from process to process (a core's power state, a code or data
+    layout) so a few samples cluster in two groups, which a spread around the median describes poorly. The
+    samples are split at their largest gap; the split counts only when each side has at least two samples and
+    the gap is both large (BIMODAL_MIN_GAP) and many times the spread inside the levels (BIMODAL_GAP_SPREADS),
+    so ordinary noise around one level is not taken for two.
+    """
+    n = len(values)
+    if n < 5:
+        return None
+    s = sorted(values)
+    centre = statistics.median(s)
+    if centre <= 0:
+        return None
+    gap, at = max((s[i + 1] - s[i], i) for i in range(n - 1))
+    low, high = s[:at + 1], s[at + 1:]
+    if len(low) < 2 or len(high) < 2 or gap < BIMODAL_MIN_GAP * centre:
+        return None
+    within = [v - statistics.fmean(side) for side in (low, high) for v in side]
+    spread = max((sum(d * d for d in within) / (n - 2)) ** 0.5, BIMODAL_FLOOR * centre)
+    if gap < BIMODAL_GAP_SPREADS * spread:
+        return None
+    return statistics.median(low), statistics.median(high), gap / centre
+
+
 def measured_count(record, name):
     """How many of a benchmark's samples were measured (not filled in by copying a median to keep rounds aligned)."""
     values = record["samples"].get(name, [])
@@ -44,7 +76,7 @@ def summarise(record):
             scaled.append(v * cal_median / clock)
         found = record.get("counters", {}).get(name, {})
         out[name] = {"median_ns": statistics.median(scaled), "cv": robust_cv(scaled), "n": len(scaled), "rounds": scaled,
-                     "measured": measured,
+                     "measured": measured, "modes": modes([v for v, m in zip(scaled, measured) if m]),
                      "counters": {k: {"median": statistics.median(v), "cv": robust_cv(v)} for k, v in found.items() if v}}
     drift = (rounds[-1]["calibration_end_ns"] / rounds[0]["calibration_start_ns"] - 1.0) if rounds else 0.0
     return out, cal_median, robust_cv(cal), drift
@@ -69,7 +101,7 @@ def pair_ratios(stats):
                                                      stats[m].get("measured", []), stats[ref].get("measured", []))
                          if b > 0 and ma and mb]
             if per_round:
-                pairs[m] = {"reference": ref, "ratio": statistics.median(per_round), "cv": robust_cv(per_round)}
+                pairs[m] = {"reference": ref, "ratio": statistics.median(per_round), "cv": robust_cv(per_round), "modes": modes(per_round)}
                 mi = stats[m]["counters"].get("instructions")
                 ri = stats[ref]["counters"].get("instructions")
                 if mi and ri and ri["median"] > 0:

@@ -52,7 +52,7 @@ same epochs as baselines, so absolute times compare like for like; about 35 s he
 | `ENFORCE` | A regression fails the build |
 | `OFF` | No check (CI uses this; its own job runs the full rounds) |
 
-**How a measurement is made robust** (`tools/perf/bench_check.py`):
+**How a measurement is made robust** (`tools/perf/bench_check.py`, implemented in the `sub0perf` package, see [Tooling layout](#tooling-layout)):
 
 | Threat | Countermeasure |
 |---|---|
@@ -62,6 +62,7 @@ same epochs as baselines, so absolute times compare like for like; about 35 s he
 | Environment shifted too far to judge absolute times | When the controls move by more than the tolerance beyond the clock, absolute verdicts become **ENVIRONMENT** (inconclusive, never blocking). Pair ratios and instruction counts are relative to the same environment and still judge. Seen: a +41% shift while another process ran benchmark rounds |
 | Core migration and preemption | Each measurement is pinned to one logical CPU (`--cpu`, default the last) at raised priority. Spreads fell from a 2.7% median and 17.6% worst to 1.1% and 7.6%, and calibration from 0.6% to 0.1% |
 | Other load on the machine | **Load check:** CPU time used by other processes is sampled before each round. Above `--max-load` (20%) the run waits up to `--settle` seconds, then records the round as busy. The report states how many rounds ran busy |
+| Two timing levels from process to process | **Bimodal detection:** a benchmark whose samples form two clusters (largest gap at least 2% of the median and four times the spread inside the clusters, at least two samples each, from five rounds) is checked level by level. A regression needs the *fast* level to be slower than the baseline by more than the threshold, an improvement the slow level faster; if only one level moved, the verdict is **NOISY** (marked `bimodal` in the report), which the gate retries with more rounds and never blocks on. Both levels moving is a real change and keeps its verdict. Pair ratios get the same treatment. See the 2026-10-20 finding for the evidence |
 | Noise mistaken for change | **Variance:** a robust spread (median absolute deviation) per benchmark across rounds. A change must exceed both the tolerance (10%) and 3x the noise. Spread above `--max-cv` (5%) is **NOISY**: the quick check adds rounds for those benchmarks (up to double) and then reports them as inconclusive, never as passed or failed |
 | Clock-dependent time, and changes too small for timing noise | **Hardware counters, where the OS exposes them** (Linux perf_event on bare metal; not Windows, WSL2 or GitHub's hosted runners, which are virtual machines without the processor's counters). The report and checks use them per op: instructions are nearly deterministic, so they are judged at a 2% tolerance (`--instr-tolerance`) and catch added work that timing noise hides; cycles do not depend on clock speed; IPC and branch-miss rate are shown. Pairs add the instruction ratio against the hand-written reference. A counter regression blocks like a time regression, and `accept` logs counter changes too. Elsewhere the report says counters are unavailable |
 | Host-dependent absolute times | **Pairs:** each hand-written reference's group is reported as a ratio taken from adjacent measurements in the same round. This is nearly independent of the host, so CI and new machines get it without a baseline |
@@ -130,11 +131,43 @@ a hook prints a message and does nothing instead of failing.
   `No controls: suite spread X% used as an extra noise floor`. Repositories with controls keep the
   plain rule. The logic is covered by `python -m unittest discover -s tools/perf`.
 
+### Tooling layout
+
+`tools/perf/bench_check.py` is a thin shim with the command line below, so consumers (which find it
+through `sub0math_tooling_dir.txt`) and installed git hooks (which call `bench_check.py gate
+--refs-from-stdin` by path) are unaffected by the internals. The code is the `tools/perf/sub0perf`
+package, lowest layer first:
+
+| Module | Holds |
+|---|---|
+| `common` | Constants (`CALIBRATION`, `REFERENCE_MARK`), `group_of`, `read_json`, `atomic_write_text`, `tooling_script` |
+| `platform_proc` | CPU pinning and priority, launching a measurement, machine CPU time counters, `pid_alive` |
+| `load` | System load sampling, waiting for a quiet machine |
+| `stats` | Robust CV, bimodal detection (`modes`), calibration-scaled medians (`summarise`), `pair_ratios` |
+| `baseline` | The two file formats: samples record (`make_record`, `write_samples`) and baseline (`baseline_data`, `baseline_tuple`, `write_baseline`) |
+| `gitstate` | `git`, HEAD, clean tree, `.git/sub0perf` (records, log), pushed refs, documentation-only pushes |
+| `runner` | One process per benchmark, interleaved calibrated rounds, `extend_rounds`, `measure_all`, `rerunner` |
+| `judge` | Verdicts for benchmarks, pairs and counters, environment controls, method mismatch; `evaluate`, `verdict_hits` |
+| `confirm` | Confirming regressions, retrying inconclusive results |
+| `report` | The markdown tables and job summary |
+| `accept` | `baseline` and `accept` commands (the logged `accepted` list) |
+| `lock`, `hooks`, `gate` | One run at a time; installing and chaining hooks; the pre-push gate |
+| `cli` | Argument parsing and the commands |
+
+Tests live in `sub0perf/tests/`, one file per area, and are found by `python -m unittest discover -s
+tools/perf` (the CI `python-tests` job). Change behaviour in the module that owns it; shared logic
+(for example, "names with a verdict among benchmarks, pairs and counters") exists once, in `judge`.
+
 A regression is accepted only explicitly, and only in the baseline you push:
 
 ```bash
 python tools/perf/bench_check.py accept --results .git/sub0perf/records/<target>/<commit>.json     --baseline perf/baselines/<host>.json --benchmark "<name>" --reason "why this is acceptable"
 ```
+
+`accept` needs measured samples for every named benchmark in `--results`: a benchmark that is absent, or
+has only filled-in copies of a median, is an error naming it (exit 2, baseline untouched) rather than a
+silent no-change entry. Measure it first, for example `bench_check.py run --exe <bench> --filter "<name or
+group>" --out samples.json`, then accept from that file.
 
 This moves those benchmarks' baseline (and pair ratios) to the new measurement and appends an entry to
 the baseline's `accepted` log: date, commit, reason, before and after. Commit the file with the change.
@@ -277,6 +310,7 @@ Separately, models should still snap settled states to exact zero where that is 
 | 2026-10-19 | Spatial algebra: carrying an inertia to a parent frame (`X^T I X`) computed the full 3x3 `E^T I E`; the hand-written reference computes the six symmetric entries | Pair `inertia to parent x1024`: 1.15x, then 1.02x (5 interleaved rounds) | `applyInverse(SpatialInertia)` computes the upper triangle and mirrors it |
 | 2026-10-19 | `PluckerTransform` apply/applyInverse runs 0.82x of hand-written scalar code: GCC 16 SLP-vectorises the column-sum form (`Mat * Vec`) but not the scalar expressions, even with stores deferred | Pair `spatial transform x1024`, vectorization remarks | The vocabulary is the fastest form known here; the scalar reference stays as the plain-numbers control |
 | 2026-10-20 | Grid ownership (`cellOf`) with `std::optional`-free `GridCell{index, known}` and a coverage query that clamps in floating point before converting: both at parity with plain scalar code on 1024 inputs, one in six outside the grid | Pairs `grid cellOf x1024` 1.01-1.04x, `grid cellsTouching x1024` 0.99-1.08x (7 interleaved rounds, noisy host) | One deferred finite test in `cellsTouching` (a branch per axis measured 1.08x); bitwise-or of the range tests in `cellOf` |
+| 2026-10-20 | The group `box vs 1024 blocks` (hand-written 2D SAT and both `AabbOverlapTester` forms) moves between two timing levels from process to process (about 5–10%), which produced confirmed REGRESSED verdicts on unrelated pushes | Repeated `--exact` runs pinned to one CPU, interleaved in time, Windows, GCC 16, a host with other agents building (calibration load 8–11%, so not a quiet machine). **(1)** Within one process, per-epoch times shift by 5–10% over seconds and the first epoch can be 20% faster (turbo, then settling); epoch error inside a process is under 1% in a calm moment, so the level is a machine state, not fixed per process. **(2)** The loops read no arrays (centres come from the grid index), so heap or array alignment, the usual suspect, does not apply. **(3)** Disabling ASLR (fixed image base, `--disable-dynamicbase`) left the spread unchanged (n = 40 each, interleaved). **(4)** `-falign-loops=64 -falign-functions=64 -falign-jumps=32` moved medians by at most 3%, in different directions per benchmark: code alignment is a small effect, not the 5–10%. **(5)** The calibration kernel itself varies 4.6–5.6% across processes (tails to +50%) and correlates only 0.2–0.5 with the benchmark times, so scaling by the clock cannot undo it: it is measured in other processes at other moments | There is no source change that removes a machine state, and the benchmark is already free of data layout effects; the hand-written reference is not touched. The fix is in the tooling: bimodal detection (above) turns a one-level shift into NOISY. Not yet shown, for a quiet-machine session: a longer A/B of the baseline entries and an in-process repeat to separate frequency from contention. The three baseline entries were not re-recorded: this host was not quiet, so re-recording is left to the architect via `accept --reason` from fresh samples |
 
 ## Measured (development host, GCC 16, -O3)
 
