@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "sub0math/config.hpp"
+#include "sub0math/geometry/detail/overlap.hpp"
 #include "sub0math/geometry/plane.hpp"
 #include "sub0math/geometry/point.hpp"
 #include "sub0math/geometry/triangle.hpp"
@@ -71,16 +72,12 @@ template<typename T>
                                                                                 T maxDistance) noexcept
 {
     using S = ScalarOf<T>;
-    const auto absolute = [](auto x) {
-        using std::abs; // quantities find sub0math::abs by argument lookup
-        return abs(x);
-    };
     const Vec<T, 3> e1 = tri.b - tri.a;
     const Vec<T, 3> e2 = tri.c - tri.a;
     const Vec<T, 3> pv = cross(ray.direction, e2);
     const auto det = dot(e1, pv);
     const auto scale = lengthSquared(e1) + lengthSquared(e2);
-    if (absolute(det) <= scale * (std::numeric_limits<S>::epsilon() * S{8})) return std::nullopt;
+    if (detail::absolute(det) <= scale * (std::numeric_limits<S>::epsilon() * S{8})) return std::nullopt;
 
     const Vec<T, 3> s = ray.origin - tri.a;
     const S u = static_cast<S>(dot(s, pv) / det);

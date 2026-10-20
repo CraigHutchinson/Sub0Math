@@ -8,6 +8,7 @@
 
 #include "sub0math/config.hpp"
 #include "sub0math/geometry/aabb.hpp"
+#include "sub0math/geometry/detail/overlap.hpp"
 #include "sub0math/geometry/point.hpp"
 #include "sub0math/linear/mat.hpp"
 #include "sub0math/linear/vec.hpp"
@@ -129,11 +130,7 @@ template<typename T, std::size_t N>
                                                                         const std::array<T, N>& t) noexcept
 {
     using S = ScalarOf<T>;
-    const auto absolute = [](auto x) {
-        using std::abs; // quantities find sub0math::abs by argument lookup
-        return abs(x);
-    };
-    const S tolerance = std::numeric_limits<S>::epsilon() * S{16};
+    const S tolerance = satTolerance<S>();
     std::array<std::array<S, N>, N> absR{}; // |r| + tolerance: near-parallel edges cannot fake a separation
     for (std::size_t i = 0; i < N; ++i)
     {
@@ -231,14 +228,13 @@ public:
     {
         // PERF: box terms once here, faster than per-block recomputation.
         using S = ScalarOf<T>;
-        const S tolerance = std::numeric_limits<S>::epsilon() * S{16};
+        const S tolerance = detail::satTolerance<S>();
         for (std::size_t i = 0; i < N; ++i)
         {
             for (std::size_t j = 0; j < N; ++j)
             {
                 r_[i][j] = box.axes.columns[i][j];
-                const S a = r_[i][j] < S{0} ? -r_[i][j] : r_[i][j];
-                absR_[i][j] = a + tolerance;
+                absR_[i][j] = detail::absolute(r_[i][j]) + tolerance;
             }
         }
         for (std::size_t j = 0; j < N; ++j)
@@ -272,15 +268,11 @@ public:
     // PERF: centre+half input ~30% faster than Aabb corners on grids.
     [[nodiscard]] SUB0MATH_FORCE_INLINE constexpr bool overlapsCentred(const Point<T, N>& centre, const Vec<T, N>& half) const noexcept
     {
-        const auto absolute = [](auto x) {
-            using std::abs; // quantities find sub0math::abs by argument lookup
-            return abs(x);
-        };
         const Vec<T, N> d = centre - box_.centre;
         // PERF: early-exit coordinate axes beat branch-free vectorised SAT here.
         for (std::size_t j = 0; j < N; ++j) // coordinate axes: the block's faces
         {
-            if (absolute(d[j]) > worldRadius_[j] + half[j]) return false;
+            if (detail::absolute(d[j]) > worldRadius_[j] + half[j]) return false;
         }
         std::array<T, N> t{};
         for (std::size_t i = 0; i < N; ++i) // the oriented box's faces
@@ -288,7 +280,7 @@ public:
             t[i] = dot(box_.axes.columns[i], d);
             T rb{};
             for (std::size_t j = 0; j < N; ++j) rb += half[j] * absR_[i][j];
-            if (absolute(t[i]) > box_.halfExtents[i] + rb) return false;
+            if (detail::absolute(t[i]) > box_.halfExtents[i] + rb) return false;
         }
         if constexpr (N == 3) // edge-pair axes a_i x e_j
         {
@@ -301,7 +293,7 @@ public:
                     const std::size_t j1 = (j + 1) % 3, j2 = (j + 2) % 3;
                     const T ra = ea[i1] * absR_[i2][j] + ea[i2] * absR_[i1][j];
                     const T rb = half[j1] * absR_[i][j2] + half[j2] * absR_[i][j1];
-                    if (absolute(t[i2] * r_[i1][j] - t[i1] * r_[i2][j]) > ra + rb) return false;
+                    if (detail::absolute(t[i2] * r_[i1][j] - t[i1] * r_[i2][j]) > ra + rb) return false;
                 }
             }
         }
