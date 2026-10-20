@@ -73,7 +73,10 @@ same epochs as baselines, so absolute times compare like for like; about 35 s he
 ### Pre-push gate and explicit acceptance
 
 Configuring a repository that builds benchmarks installs two git hooks, unless on CI or
-`SUB0MATH_PERF_GIT_HOOKS=OFF`. Neither overwrites a hook that is not ours.
+`SUB0MATH_PERF_GIT_HOOKS=OFF`. A hook that is not ours is never overwritten: it is renamed to
+`<hook>.user` and the installed hook runs it first (with the same arguments and stdin; if it fails, so
+does the push). Paths in the hooks are shell-quoted, and when python or the tooling directory is gone
+a hook prints a message and does nothing instead of failing.
 
 - **post-checkout** notes the commit. The first clean build afterwards keeps its measurement as that
   commit's record: `.git/sub0perf/records/<target>/<commit>.json`, local to the clone and never
@@ -85,6 +88,31 @@ Configuring a repository that builds benchmarks installs two git hooks, unless o
     like on this machine.
 
   Any regression that persists blocks the push, with the exact command to accept it.
+
+  **What is measured is what is pushed.** The hook reads the refs git passes on stdin. It refuses the
+  push, saying why, when tracked files have uncommitted changes (the build would include them), or when
+  the commit being pushed for any ref (deletions excepted) is not the checked-out HEAD. A push that
+  only deletes refs is not measured. Otherwise the build is the pushed commit and the gate proceeds.
+  Run by hand (`bench_check.py gate`, without `--refs-from-stdin`) it only warns about a dirty tree.
+
+  **Inconclusive results retry, then warn.** If the result includes NOISY or ENVIRONMENT verdicts
+  (against either comparison), the groups involved are measured once more with as many extra rounds
+  as the first measurement had (so the rounds double). What is still inconclusive then does not block:
+  the gate prints a WARNING naming each benchmark, and stores the list in the local record
+  (`inconclusive`, with `inconclusive_retried`) and in `.git/sub0perf/log.jsonl`. Only REGRESSED blocks.
+  A method mismatch (different epochs or pinned CPU, including unpinned against pinned) is reported
+  as inconclusive but not retried, since more rounds cannot fix it.
+
+  **One run at a time.** Measuring runs on a repository (`gate`, and `auto` with `--repo`, which the
+  after-build check uses) take the lock `.git/sub0perf/lock` (pid, time, what), so concurrent runs
+  cannot interleave and disturb each other's timing. A second run waits (`--lock-timeout`, default
+  900 s) and then gives up. A lock whose process has gone, or older than six hours, is taken over.
+
+  **Bypass.** `SUB0MATH_PERF_SKIP=<reason> git push` skips the gate; the reason is printed and logged
+  as a `skip` event. (The gate's own build sets it internally so the after-build check does not run.)
+
+  Records (`.git/sub0perf/records/...`), samples files and baselines are written atomically (temp
+  file, then replace), and records keep the shuffle `seed` of their rounds.
 
   **Confirmation pass.** Three rounds are not enough evidence to block on. Whatever is judged
   regressed on the first pass (a benchmark, a pair or a counter, against either comparison) is
@@ -108,7 +136,7 @@ python tools/perf/bench_check.py accept --results .git/sub0perf/records/<target>
 This moves those benchmarks' baseline (and pair ratios) to the new measurement and appends an entry to
 the baseline's `accepted` log: date, commit, reason, before and after. Commit the file with the change.
 The gate then lets a regression through against the earlier record only if an acceptance for that
-benchmark was added since that commit. `--all-changed` accepts every regressed or improved benchmark.
+benchmark was added since that commit (read from the baseline committed at HEAD, not the working tree). `--all-changed` accepts every regressed or improved benchmark.
 Re-recording a whole baseline also requires a reason once a baseline exists, and is logged the same
 way: `bench_check.py baseline --reason "..."`, or
 `SUB0MATH_PERF_REASON="..." cmake --build build --target <target>_baseline`. `git push --no-verify` bypasses the hook, as with

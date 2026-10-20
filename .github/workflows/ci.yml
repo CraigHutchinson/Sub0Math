@@ -15,6 +15,17 @@ permissions:
   contents: read
 
 jobs:
+  # The performance tooling's own self-test (synthetic samples, temporary git repositories); stdlib only.
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests (tools/perf)
+        run: python -m unittest discover -s tools/perf -v
+
   build-linux:
     name: build-linux (${{ matrix.compiler }})
     runs-on: ubuntu-latest
@@ -98,11 +109,11 @@ jobs:
         run: ctest --preset ci-asan
 
   performance:
-    name: performance (informational)
+    name: performance (timing informational)
     runs-on: ubuntu-latest
-    # Shared runners are noisy: timing drift is reported in the job summary, never blocking.
+    # Shared runners are noisy: timing drift is reported in the job summary, never blocking (check runs with
+    # --report-only). Build, test and script errors still fail the job; there is no job-level continue-on-error.
     # Deterministic gates (size static_asserts, must-not-compile checks) run in every test job instead.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
