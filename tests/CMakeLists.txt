@@ -28,6 +28,7 @@ target_include_directories(Sub0Math_Tests SYSTEM PRIVATE "${VENDOR_DIR}")
 # doctest::Approx works in double, so float checks promote by design; the header check keeps the rule.
 target_compile_options(Sub0Math_Tests PRIVATE ${SUB0MATH_STRICT_WARNINGS}
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-double-promotion>)
+sub0math_target_deterministic_fp(Sub0Math_Tests)
 add_test(NAME Sub0Math_Tests COMMAND Sub0Math_Tests)
 
 # ── Header self-containment ───────────────────────────────────────────────────
@@ -58,4 +59,5 @@ target_compile_options(Sub0Math_HeaderCheck PRIVATE ${SUB0MATH_STRICT_WARNINGS})
 if(SUB0MATH_BUILD_BENCHMARKS)
     sub0math_add_benchmark(Sub0Math_Bench bench_math.cpp)
     target_link_libraries(Sub0Math_Bench PRIVATE Sub0Math::Sub0Math)
+    sub0math_target_deterministic_fp(Sub0Math_Bench)
 endif()

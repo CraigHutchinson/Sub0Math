@@ -38,6 +38,27 @@ jobs:
       - name: Test
         run: ctest --preset ci-unix
 
+  # FMA hardware available: the tests build with -ffp-contract=off (sub0math_target_deterministic_fp), so
+  # results must match the baseline legs. Proves the determinism helper holds when the compiler could fuse.
+  build-linux-fma:
+    name: build-linux (gcc, x86-64-v3 FMA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
+      - name: Check the target has FMA
+        run: g++-14 -march=x86-64-v3 -dM -E -x c++ /dev/null | grep -q __FMA__
+      - name: Configure
+        run: cmake --preset ci-unix -G Ninja -DCMAKE_CXX_FLAGS=-march=x86-64-v3 -DSUB0MATH_BUILD_BENCHMARKS=OFF
+        env:
+          CC: gcc-14
+          CXX: g++-14
+      - name: Build
+        run: cmake --build --preset ci-unix
+      - name: Test
+        run: ctest --preset ci-unix
+
   build-windows:
     runs-on: windows-latest
     steps:
