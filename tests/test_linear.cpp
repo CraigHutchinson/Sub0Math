@@ -1,5 +1,7 @@
+#include <cmath>
 #include <concepts>
 #include <doctest.h>
+#include <limits>
 #include <type_traits>
 
 #include "sub0math/linear.hpp"
@@ -64,4 +66,32 @@ TEST_CASE("Matrices are column-major")
     CHECK(moved == Vec3d{5.0, 0.0, 1.0});
     CHECK(transpose(m)(2, 0) == 5.0);
     CHECK(m * Mat3d::identity() == m);
+}
+
+TEST_CASE("Vectors convert to and from SI numbers and report finiteness")
+{
+    using namespace sub0math::f64::literals;
+    static_assert(std::same_as<decltype(toSi(Vec3<f64::Length>{})), Vec3d>);
+    static_assert(std::same_as<decltype(toSi(Vec3d{})), Vec3d>);
+    static_assert(std::same_as<decltype(fromSi<f64::Length>(Vec3d{})), Vec3<f64::Length>>);
+    static_assert(std::same_as<decltype(fromSi<double>(Vec3d{})), Vec3d>);
+    static_assert(std::same_as<decltype(toSi(Vec2<f32::Length>{})), Vec2f>);
+    static_assert(toSi(Vec3<f64::Length>{1_m, 2_m, 3_m}) == Vec3d{1.0, 2.0, 3.0});
+    static_assert(fromSi<f64::Length>(Vec3d{1.0, 2.0, 3.0}) == Vec3<f64::Length>{1_m, 2_m, 3_m});
+
+    const Vec3<f64::Length> d{millimetres(350.0), 2_m, -1_m};
+    CHECK(toSi(d) == Vec3d{0.35, 2.0, -1.0});
+    CHECK(fromSi<f64::Length>(toSi(d)) == d);
+    const Vec<f64::Length, 5> wide{1_m, 2_m, 3_m, 4_m, 5_m};
+    CHECK(toSi(wide)[4] == 5.0);
+
+    constexpr double Nan = std::numeric_limits<double>::quiet_NaN();
+    constexpr double Inf = std::numeric_limits<double>::infinity();
+    CHECK(isFinite(Vec3d{1.0, 2.0, 3.0}));
+    CHECK(isFinite(d));
+    CHECK_FALSE(isFinite(Vec3d{1.0, Nan, 3.0}));
+    CHECK_FALSE(isFinite(Vec3d{Inf, 0.0, 0.0}));
+    CHECK_FALSE(isFinite(Vec3<f64::Length>{1_m, 2_m, f64::Length::fromSi(-Inf)}));
+    CHECK_FALSE(isFinite(Vec2f{std::numeric_limits<float>::infinity(), 0.0F}));
+    CHECK_FALSE(isFinite(Vec<double, 5>{0.0, 0.0, 0.0, 0.0, Nan}));
 }

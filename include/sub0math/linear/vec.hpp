@@ -290,6 +290,89 @@ template<typename T, std::size_t N>
     return out;
 }
 
+namespace detail
+{
+
+// The plain SI number of a component: a plain number as itself, a quantity through si().
+template<typename T>
+[[nodiscard]] constexpr ScalarOf<T> siOf(const T& value) noexcept
+{
+    if constexpr (std::is_arithmetic_v<T>)
+    {
+        return value;
+    }
+    else
+    {
+        return value.si();
+    }
+}
+
+// A component of type T from a plain SI number: a plain number converts, a quantity uses fromSi.
+template<typename T>
+[[nodiscard]] constexpr T fromSiOf(ScalarOf<T> si) noexcept
+{
+    if constexpr (std::is_arithmetic_v<T>)
+    {
+        return si;
+    }
+    else
+    {
+        return T::fromSi(si);
+    }
+}
+
+} // namespace detail
+
+/**
+ * Strips the units from a vector: each component in coherent SI.
+ *
+ * @param v A vector of numbers or quantities.
+ * @return The same values as plain numbers (metres, newtons, ... as the dimension says).
+ */
+template<typename T, std::size_t N>
+[[nodiscard]] constexpr Vec<ScalarOf<T>, N> toSi(const Vec<T, N>& v) noexcept
+{
+    Vec<ScalarOf<T>, N> out{};
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = detail::siOf(v.template get<i>());
+    });
+    return out;
+}
+
+/**
+ * Gives units to a vector of SI numbers; the inverse of `toSi`.
+ *
+ * @tparam Q Component type of the result: a quantity (or a plain number, which makes this a copy).
+ * @param v Components in coherent SI.
+ * @return The vector of Q.
+ */
+template<typename Q, typename Rep, std::size_t N>
+    requires std::is_same_v<ScalarOf<Q>, Rep>
+[[nodiscard]] constexpr Vec<Q, N> fromSi(const Vec<Rep, N>& v) noexcept
+{
+    Vec<Q, N> out{};
+    detail::forEachComponent<N>([&](auto i) {
+        out.template get<i>() = detail::fromSiOf<Q>(v.template get<i>());
+    });
+    return out;
+}
+
+/**
+ * Reports whether every component is finite.
+ *
+ * @param v A vector of numbers or quantities.
+ * @return False when any component is an infinity or NaN.
+ */
+template<typename T, std::size_t N>
+[[nodiscard]] bool isFinite(const Vec<T, N>& v) noexcept
+{
+    bool finite = true;
+    detail::forEachComponent<N>([&](auto i) {
+        finite = finite && std::isfinite(detail::siOf(v.template get<i>()));
+    });
+    return finite;
+}
+
 template<typename T>
 using Vec2 = Vec<T, 2>; ///< 2-vector of T.
 template<typename T>

@@ -26,19 +26,6 @@ SUB0MATH_FORCE_INLINE constexpr Vec<T, 3> transposeTimes(const Mat3<T>& e, const
     return {dot(e.columns[0], v), dot(e.columns[1], v), dot(e.columns[2], v)};
 }
 
-template<typename L>
-constexpr auto siValue(const L& value) noexcept
-{
-    if constexpr (std::is_arithmetic_v<L>)
-    {
-        return value;
-    }
-    else
-    {
-        return value.si();
-    }
-}
-
 } // namespace detail
 
 /**
@@ -70,8 +57,7 @@ struct PluckerTransform
     [[nodiscard]] static constexpr PluckerTransform fromPose(const RigidTransform<T, L>& poseOfBInA) noexcept
     {
         const Vec<L, 3>& t = poseOfBInA.translation;
-        return {transpose(toMat3(poseOfBInA.rotation)),
-                {detail::siValue(t.x), detail::siValue(t.y), detail::siValue(t.z)}};
+        return {transpose(toMat3(poseOfBInA.rotation)), toSi(t)};
     }
 
     /**
@@ -179,6 +165,32 @@ template<Real T>
 [[nodiscard]] constexpr PluckerTransform<T> inverse(const PluckerTransform<T>& x) noexcept
 {
     return {transpose(x.rotation), -(x.rotation * x.translation)};
+}
+
+/**
+ * Recovers the pose that `PluckerTransform::fromPose` was made from.
+ *
+ * @tparam L Position type of the pose: a length quantity of representation T.
+ * @param x The Plücker transform from A to B.
+ * @return B's pose in A, with quantity positions.
+ */
+template<typename L, Real T>
+    requires(!std::is_same_v<L, T>)
+[[nodiscard]] RigidTransform<T, L> toRigidTransform(const PluckerTransform<T>& x) noexcept
+{
+    return {Quat<T>::fromRotationMatrix(transpose(x.rotation)), fromSi<L>(x.translation)};
+}
+
+/**
+ * Recovers the pose that `PluckerTransform::fromPose` was made from.
+ *
+ * @param x The Plücker transform from A to B.
+ * @return B's pose in A, with plain-number positions.
+ */
+template<Real T>
+[[nodiscard]] RigidTransform<T, T> toRigidTransform(const PluckerTransform<T>& x) noexcept
+{
+    return {Quat<T>::fromRotationMatrix(transpose(x.rotation)), x.translation};
 }
 
 using PluckerTransformd = PluckerTransform<double>; ///< Double PlÃ¼cker transform.

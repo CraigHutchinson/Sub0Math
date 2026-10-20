@@ -1,7 +1,10 @@
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <doctest.h>
+#include <random>
 #include <type_traits>
 
 #include "sub0math/linear.hpp"
@@ -276,4 +279,109 @@ TEST_CASE("Spatial inertia: parallel axis, action on motion and change of frame"
     const SpatialInertiad half = SpatialInertiad::fromCentreOfMass(1.25, c, Mat3d{});
     const SpatialInertiad whole = SpatialInertiad::fromCentreOfMass(2.5, c, Mat3d{});
     checkNear(matrixOf(half + half), matrixOf(whole));
+}
+
+namespace
+{
+
+double rotationDifference(const Mat3d& a, const Mat3d& b)
+{
+    double worst = 0.0;
+    for (std::size_t r = 0; r < 3; ++r)
+    {
+        for (std::size_t c = 0; c < 3; ++c) worst = std::max(worst, std::abs(a(r, c) - b(r, c)));
+    }
+    return worst;
+}
+
+double norm(const Quatd& q)
+{
+    return std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
+}
+
+} // namespace
+
+TEST_CASE("Quaternion from rotation matrix: random rotations and every branch of Shepperd's method")
+{
+    std::mt19937_64 rng(20261020);
+    std::normal_distribution<double> gauss;
+    std::size_t branches[4] = {};
+    for (int n = 0; n < 20000; ++n)
+    {
+        Quatd q{gauss(rng), gauss(rng), gauss(rng), gauss(rng)};
+        const double len = norm(q);
+        q = {q.w / len, q.x / len, q.y / len, q.z / len};
+        const Mat3d m = toMat3(q);
+        const Quatd back = Quatd::fromRotationMatrix(m);
+        CHECK(rotationDifference(toMat3(back), m) < 1e-14);
+        CHECK(std::abs(norm(back) - 1.0) < 1e-14);
+        CHECK(back.w >= 0.0);
+        // The same rotation as q: equal up to sign.
+        const double sign = q.w < 0.0 ? -1.0 : 1.0;
+        CHECK(std::abs(back.w - sign * q.w) < 1e-12);
+        CHECK(std::abs(back.x - sign * q.x) < 1e-12);
+        CHECK(std::abs(back.y - sign * q.y) < 1e-12);
+        CHECK(std::abs(back.z - sign * q.z) < 1e-12);
+        const double tr = m(0, 0) + m(1, 1) + m(2, 2);
+        if (tr >= m(0, 0) && tr >= m(1, 1) && tr >= m(2, 2)) ++branches[0];
+        else if (m(0, 0) >= m(1, 1) && m(0, 0) >= m(2, 2)) ++branches[1];
+        else if (m(1, 1) >= m(2, 2)) ++branches[2];
+        else ++branches[3];
+    }
+    for (const std::size_t count : branches) CHECK(count > 100); // all four branches were exercised
+}
+
+TEST_CASE("Quaternion from rotation matrix: identity, half turns and tiny angles")
+{
+    const Quatd identity = Quatd::fromRotationMatrix(Mat3d::identity());
+    CHECK(identity == Quatd{1.0, 0.0, 0.0, 0.0});
+
+    for (const Vec3d& axis : {Vec3d{1.0, 0.0, 0.0}, Vec3d{0.0, 1.0, 0.0}, Vec3d{0.0, 0.0, 1.0},
+                              normalized(Vec3d{1.0, 1.0, 0.0}), normalized(Vec3d{-1.0, 2.0, 3.0})})
+    {
+        const Quatd half = Quatd::fromAxisAngle(axis, f64::Angle::fromSi(3.14159265358979323846));
+        const Quatd back = Quatd::fromRotationMatrix(toMat3(half));
+        CHECK(rotationDifference(toMat3(back), toMat3(half)) < 1e-14);
+        CHECK(std::abs(norm(back) - 1.0) < 1e-14);
+        for (const double angle : {1e-9, -1e-9, 1e-4, 3.14159265, 3.14159265358979 - 1e-9})
+        {
+            const Quatd q = Quatd::fromAxisAngle(axis, f64::Angle::fromSi(angle));
+            CHECK(rotationDifference(toMat3(Quatd::fromRotationMatrix(toMat3(q))), toMat3(q)) < 1e-14);
+        }
+    }
+
+    // Float works the same way, to float precision.
+    const Quatf qf = Quatf::fromAxisAngle({0.0F, 0.0F, 1.0F}, f32::Angle::fromSi(2.0F));
+    const Quatf backf = Quatf::fromRotationMatrix(toMat3(qf));
+    CHECK(backf.w == doctest::Approx(qf.w).epsilon(1e-5));
+    CHECK(backf.z == doctest::Approx(qf.z).epsilon(1e-5));
+}
+
+TEST_CASE("toRigidTransform undoes PluckerTransform::fromPose")
+{
+    std::mt19937_64 rng(7);
+    std::normal_distribution<double> gauss;
+    for (int n = 0; n < 5000; ++n)
+    {
+        Quatd q{gauss(rng), gauss(rng), gauss(rng), gauss(rng)};
+        const double len = norm(q);
+        q = {q.w / len, q.x / len, q.y / len, q.z / len};
+        const Vec3d t{gauss(rng), gauss(rng), gauss(rng)};
+        const PluckerTransformd x = PluckerTransformd::fromPose(RigidTransformd{q, t});
+
+        const RigidTransformd pose = toRigidTransform(x);
+        CHECK(pose.translation == t);
+        CHECK(rotationDifference(toMat3(pose.rotation), toMat3(q)) < 1e-14);
+        const PluckerTransformd again = PluckerTransformd::fromPose(pose);
+        CHECK(rotationDifference(again.rotation, x.rotation) < 1e-14);
+        CHECK(again.translation == x.translation);
+
+        // With typed positions the translation comes back as lengths.
+        const RigidTransform<double, f64::Length> typed = toRigidTransform<f64::Length>(x);
+        CHECK(toSi(typed.translation) == t);
+        CHECK(PluckerTransformd::fromPose(typed).translation == x.translation);
+    }
+    static_assert(std::same_as<decltype(toRigidTransform(PluckerTransformd{})), RigidTransformd>);
+    static_assert(std::same_as<decltype(toRigidTransform<f64::Length>(PluckerTransformd{})),
+                               RigidTransform<double, f64::Length>>);
 }

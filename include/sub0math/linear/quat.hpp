@@ -41,6 +41,46 @@ struct Quat
         return Quat{std::cos(half), unitAxis.x * s, unitAxis.y * s, unitAxis.z * s};
     }
 
+    /**
+     * Makes the rotation equal to a rotation matrix (Shepperd's method).
+     *
+     * Picks the largest of the trace and the diagonal entries to divide by, so there is no
+     * cancellation for any rotation, including half turns. The result is normalised, which absorbs
+     * small departures of the matrix from orthonormal, and has a non-negative `w` (q and -q are the
+     * same rotation).
+     *
+     * @param m A proper rotation matrix (orthonormal, determinant 1).
+     * @return The unit quaternion that rotates vectors as `m` does.
+     */
+    [[nodiscard]] static Quat fromRotationMatrix(const Mat3<T>& m) noexcept
+    {
+        const T trace = m(0, 0) + m(1, 1) + m(2, 2);
+        Quat q;
+        if (trace >= m(0, 0) && trace >= m(1, 1) && trace >= m(2, 2))
+        {
+            const T s = std::sqrt(T{1} + trace) * T{2};
+            q = {s / T{4}, (m(2, 1) - m(1, 2)) / s, (m(0, 2) - m(2, 0)) / s, (m(1, 0) - m(0, 1)) / s};
+        }
+        else if (m(0, 0) >= m(1, 1) && m(0, 0) >= m(2, 2))
+        {
+            const T s = std::sqrt(T{1} + m(0, 0) - m(1, 1) - m(2, 2)) * T{2};
+            q = {(m(2, 1) - m(1, 2)) / s, s / T{4}, (m(0, 1) + m(1, 0)) / s, (m(0, 2) + m(2, 0)) / s};
+        }
+        else if (m(1, 1) >= m(2, 2))
+        {
+            const T s = std::sqrt(T{1} + m(1, 1) - m(0, 0) - m(2, 2)) * T{2};
+            q = {(m(0, 2) - m(2, 0)) / s, (m(0, 1) + m(1, 0)) / s, s / T{4}, (m(1, 2) + m(2, 1)) / s};
+        }
+        else
+        {
+            const T s = std::sqrt(T{1} + m(2, 2) - m(0, 0) - m(1, 1)) * T{2};
+            q = {(m(1, 0) - m(0, 1)) / s, (m(0, 2) + m(2, 0)) / s, (m(1, 2) + m(2, 1)) / s, s / T{4}};
+        }
+        const T norm = std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
+        const T scale = (q.w < T{0} ? T{-1} : T{1}) / norm;
+        return {q.w * scale, q.x * scale, q.y * scale, q.z * scale};
+    }
+
     /** @return The vector part (x, y, z). */
     [[nodiscard]] constexpr Vec<T, 3> vector() const noexcept
     {
