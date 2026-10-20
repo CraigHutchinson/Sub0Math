@@ -206,6 +206,11 @@ The cost is the speed FMA would give, so a deliberate performance experiment wit
 builds the tests with `-march=x86-64-v3` (FMA available) and must still pass. Turning the helper on in a
 repository moves its timings: re-record the baselines deliberately, with the reason.
 
+On MinGW-w64 GCC, the helper also adds `-Wa,-muse-unaligned-vector-move` when the assembler supports it.
+Windows guarantees only 16-byte stack alignment, but AVX code spills 32-byte vectors with aligned moves,
+which fault. A consumer's station tests segfaulted under `-march=x86-64-v3` until this was added
+(2026-10-20).
+
 ## Profiling
 
 Build with the `profile` preset (optimised, debug info, frame pointers), then:

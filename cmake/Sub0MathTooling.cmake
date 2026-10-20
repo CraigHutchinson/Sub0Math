@@ -97,6 +97,16 @@ function(sub0math_target_deterministic_fp target)
     else() # GCC, Clang, AppleClang
         target_compile_options(${target} ${scope} $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
     endif()
+    # MinGW-w64 GCC guarantees only 16-byte stack alignment, but AVX code (-march=x86-64-v3 or native) spills
+    # 32-byte vectors with aligned moves, which fault. Assembling vector moves as unaligned ones fixes it at no
+    # measurable cost; without it, BikeDynamics' tests segfaulted under -march=x86-64-v3 (2026-10-20).
+    if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-Wa,-muse-unaligned-vector-move" SUB0MATH_HAVE_UNALIGNED_VECTOR_MOVE)
+        if(SUB0MATH_HAVE_UNALIGNED_VECTOR_MOVE)
+            target_compile_options(${target} ${scope} $<$<COMPILE_LANGUAGE:CXX>:-Wa,-muse-unaligned-vector-move>)
+        endif()
+    endif()
 endfunction()
 
 function(sub0math_add_benchmark target)
