@@ -168,7 +168,9 @@ struct RegularGrid
         {
             const auto lo = static_cast<S>((box.lo[i] - origin[i]) / spacing);
             const auto hi = static_cast<S>((box.hi[i] - origin[i]) / spacing);
-            finite &= std::isfinite(lo) & std::isfinite(hi);
+            const bool loFinite = std::isfinite(lo); // named, so Clang's bitwise-on-calls warning stays quiet
+            const bool hiFinite = std::isfinite(hi);
+            finite &= loFinite & hiFinite;
             const auto cells = static_cast<S>(nodes[i] - 1);
             // Limit while still floating point, so the conversion is always in range. A lower index above
             // the last cell, or an upper one below the first, makes the axis empty. With the number as the
