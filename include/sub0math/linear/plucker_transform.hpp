@@ -171,7 +171,7 @@ template<Real T>
  * Recovers the pose that `PluckerTransform::fromPose` was made from.
  *
  * @tparam L Position type of the pose: a length quantity of representation T.
- * @param x The Plücker transform from A to B.
+ * @param x The PlÃ¼cker transform from A to B.
  * @return B's pose in A, with quantity positions.
  */
 template<typename L, Real T>
@@ -184,7 +184,7 @@ template<typename L, Real T>
 /**
  * Recovers the pose that `PluckerTransform::fromPose` was made from.
  *
- * @param x The Plücker transform from A to B.
+ * @param x The PlÃ¼cker transform from A to B.
  * @return B's pose in A, with plain-number positions.
  */
 template<Real T>
