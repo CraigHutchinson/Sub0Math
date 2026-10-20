@@ -493,6 +493,7 @@ class HooksTest(RepoTestCase):
         out = self.repo / "seen.txt"
         (hooks / "pre-push").write_text(f'#!/bin/sh\necho "args=$@" > "{out.as_posix()}"\ncat >> "{out.as_posix()}"\n',
                                          encoding="utf-8", newline="\n")
+        (hooks / "pre-push").chmod(0o755)  # a real hook is executable; git and the chain run it directly
         self.install()
         self.assertTrue((hooks / "pre-push.user").is_file())
         self.assertIn(bc.HOOK_MARK, (hooks / "pre-push").read_text(encoding="utf-8"))
@@ -508,6 +509,7 @@ class HooksTest(RepoTestCase):
         hooks = self.hooks_dir()
         hooks.mkdir(parents=True, exist_ok=True)
         (hooks / "pre-push").write_text("#!/bin/sh\nexit 3\n", encoding="utf-8", newline="\n")
+        (hooks / "pre-push").chmod(0o755)
         self.install()
         self.assertEqual(self.run_hook("pre-push", "origin", "url").returncode, 3)
 
