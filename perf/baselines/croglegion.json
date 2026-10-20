@@ -18,19 +18,19 @@
       "rounds": 5
     },
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
-      "median_ns": 1685.37,
-      "cv": 0.0207,
-      "rounds": 5
+      "median_ns": 1389.155,
+      "cv": 0.0184,
+      "rounds": 7
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
-      "median_ns": 1316.902,
-      "cv": 0.0316,
-      "rounds": 5
+      "median_ns": 1089.863,
+      "cv": 0.0551,
+      "rounds": 7
     },
     "box vs 1024 blocks, hand-written 2D SAT": {
-      "median_ns": 1189.864,
-      "cv": 0.0128,
-      "rounds": 5
+      "median_ns": 1170.657,
+      "cv": 0.059,
+      "rounds": 7
     },
     "dot, double": {
       "median_ns": 696.042,
@@ -111,11 +111,11 @@
   "pairs": {
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 1.3957
+      "ratio": 1.1691
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 1.082
+      "ratio": 0.9104
     },
     "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
       "reference": "ray vs triangles, hand-written Moller-Trumbore",
@@ -136,6 +136,36 @@
       "commit": "f0987788f1b84d3696adc34da3554d8fc75948c6",
       "reason": "nanobench 4.3.11 -> 4.6.0: the harness change makes the hand-written box reference ~11% faster (A/B'd both ways); every benchmark re-measured under the new harness",
       "benchmarks": "all (re-recorded)"
+    },
+    {
+      "date": "2026-10-20",
+      "commit": "2e54e611b05fa89b37718e209c0aafcfaecfc5f3",
+      "reason": "Box-vs-blocks group re-measured (7 rounds, idle host): the API is 13-16% faster after the shared SAT helper (c267b7b); the unchanged hand-written reference is within noise after calibration (-1.6%); two gated pushes had flagged it +6% (environment)",
+      "benchmarks": {
+        "box vs 1024 blocks, hand-written 2D SAT": {
+          "from_ns": 1189.864,
+          "to_ns": 1170.657,
+          "change": -0.0161
+        },
+        "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
+          "from_ns": 1685.37,
+          "to_ns": 1389.155,
+          "change": -0.1758,
+          "pair_ratio": {
+            "from": 1.3957,
+            "to": 1.1691
+          }
+        },
+        "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
+          "from_ns": 1316.902,
+          "to_ns": 1089.863,
+          "change": -0.1724,
+          "pair_ratio": {
+            "from": 1.082,
+            "to": 0.9104
+          }
+        }
+      }
     }
   ]
 }
