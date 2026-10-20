@@ -60,12 +60,17 @@ jobs:
           path: .upstream/checkout
           fetch-depth: 0
       - name: Check ported commit and blobs
-        run: python3 .sub0math/tools/provenance/upstream_provenance.py check --manifest "${{ inputs.manifest }}" --upstream-dir .upstream/checkout
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+        run: python3 .sub0math/tools/provenance/upstream_provenance.py check --manifest "$MANIFEST" --upstream-dir .upstream/checkout
       - name: Compare with upstream
         id: drift
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          UPSTREAM_REF: ${{ inputs.upstream-ref }}
         run: |
-          python3 .sub0math/tools/provenance/upstream_provenance.py drift --manifest "${{ inputs.manifest }}" \
-            --upstream-dir .upstream/checkout --ref "${{ inputs.upstream-ref }}" --report upstream-drift.md
+          python3 .sub0math/tools/provenance/upstream_provenance.py drift --manifest "$MANIFEST" \
+            --upstream-dir .upstream/checkout --ref "$UPSTREAM_REF" --report upstream-drift.md
           cat upstream-drift.md >> "$GITHUB_STEP_SUMMARY"
       - name: Open, update or close the drift issue
         env:
