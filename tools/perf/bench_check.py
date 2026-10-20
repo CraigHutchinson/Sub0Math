@@ -66,11 +66,13 @@ still read; they lack calibration and spread, so judging falls back to the suite
 """
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
 import platform
 import random
+import shlex
 import statistics
 import subprocess
 import sys
@@ -228,16 +230,36 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
 def run_command(args):
     names = list_names(args.exe, args.filter)
     samples, meta, positions, counters = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    write_samples(args.out, args.exe, samples, meta, positions, args.epochs, counters)
+    write_samples(args.out, make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed))
     return 0
 
 
-def write_samples(path, exe, samples, meta, positions, epochs=0, counters=None):
-    record = {"format": 2, "exe": Path(exe).name, "epochs": epochs, "cpu": PIN_CPU, "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
-              "system": f"{platform.system()} {platform.release()}", "rounds": meta, "samples": samples,
-              "positions": positions}
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8", newline="\n")
+def atomic_write_text(path, text):
+    """Writes `text` to `path` through a temp file in the same directory, so a reader never sees half a file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def make_record(exe, samples, meta, positions, counters, epochs=0, seed=None):
+    """The one samples record written by run, auto and gate (format 2; `seed` is the shuffle seed of the rounds)."""
+    return {"format": 2, "exe": Path(exe).name, "epochs": epochs, "cpu": PIN_CPU, "seed": seed, "counters": counters or {},
+            "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}",
+            "rounds": meta, "samples": samples, "positions": positions}
+
+
+def write_samples(path, record):
+    atomic_write_text(path, json.dumps(record, indent=1) + "\n")
 
 
 # ── Statistics ──────────────────────────────────────────────────────────────────────────────────────
@@ -337,8 +359,7 @@ def baseline_data(record):
 
 
 def write_baseline(path, data):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    atomic_write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 def baseline_command(args):
@@ -517,8 +538,11 @@ def evaluate(record, baseline_path, tolerance, pair_tolerance, max_cv, absolute,
     method_notes = []
     if record.get("epochs", 0) != base_epochs:
         method_notes.append(f"epochs differ (now {record.get('epochs', 0) or 'default'}, baseline {base_epochs or 'default'})")
-    if record.get("cpu") is not None and base_data.get("cpu") is not None and record.get("cpu") != base_data.get("cpu"):
-        method_notes.append(f"pinned CPU differs (now {record.get('cpu')}, baseline {base_data.get('cpu')}; cores of a hybrid CPU differ in speed)")
+    if "cpu" in record and "cpu" in base_data and record["cpu"] != base_data["cpu"]:  # None = unpinned; absent = unknown
+        def shown(cpu):
+            return "unpinned" if cpu is None else cpu
+        method_notes.append(f"pinned CPU differs (now {shown(record['cpu'])}, baseline {shown(base_data['cpu'])};"
+                            f" cores of a hybrid CPU differ in speed)")
     env = {"method": None if not method_notes else
            "; ".join(method_notes) + ": absolute times are not like for like; pair ratios still are",
            "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
@@ -698,11 +722,18 @@ def confirm_regressions(evaluate_all, remeasure_rounds, confirm_rounds):
 def auto_command(args):
     if os.environ.get("SUB0MATH_PERF_SKIP"):
         return 0  # the gate builds benchmarks itself and measures them once
+    try:
+        with PerfLock(Path(args.repo), "auto", args.lock_timeout) if args.repo else contextlib.nullcontext():
+            return measure_and_judge(args)
+    except LockTimeout as e:
+        print(f"sub0perf: {e}")
+        return 0 if args.report_only else 1
+
+
+def measure_and_judge(args):
     names = list_names(args.exe, args.filter)
     samples, meta, positions, counters = run_rounds(args.exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-    record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(args.exe).name,
-              "epochs": args.epochs, "cpu": PIN_CPU,
-              "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
+    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed)
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total.
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate(record, args.baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
@@ -727,7 +758,7 @@ def auto_command(args):
     confirm_regressions(lambda: [evaluate(record, args.baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute,
                                           bool(args.filter), args.instr_tolerance)], rerun, args.confirm_rounds)
     if args.out:
-        write_samples(args.out, args.exe, samples, meta, positions, args.epochs, counters)
+        write_samples(args.out, record)
     if args.record and args.target:
         save_record(Path(args.repo or "."), args.target, record, only_if_missing=True)
     _, _, regressed = report(record, args)
@@ -777,8 +808,7 @@ def save_record(repo, target, record, only_if_missing=False):
     path = d / "records" / target / f"{head}.json"
     if only_if_missing and path.is_file():
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({**record, "commit": head}, indent=1) + "\n", encoding="utf-8", newline="\n")
+    atomic_write_text(path, json.dumps({**record, "commit": head}, indent=1) + "\n")
     log_event(repo, {"event": "record", "target": target, "commit": head})
     return path
 
@@ -802,7 +832,7 @@ def accepted_since(repo, baseline_rel, reference_sha):
         if not text:
             return []
         return json.loads(text).get("accepted", [])
-    now = entries(Path(repo, baseline_rel).read_text(encoding="utf-8") if Path(repo, baseline_rel).is_file() else "")
+    now = entries(git(repo, "show", f"HEAD:{baseline_rel}"))  # the committed baseline, not the working tree
     before = entries(git(repo, "show", f"{reference_sha}:{baseline_rel}") if reference_sha else "")
     names = set()
     for e in now[len(before):]:
@@ -813,16 +843,217 @@ def accepted_since(repo, baseline_rel, reference_sha):
     return names
 
 
+class LockTimeout(Exception):
+    pass
+
+
+def pid_alive(pid):
+    """Whether a process with this id exists (never signals it: os.kill would terminate it on Windows)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, 0, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel.GetLastError() == 5  # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class PerfLock:
+    """Serialises measuring runs on one repository: `.git/sub0perf/lock`, created exclusively, holding pid and time.
+
+    A lock whose process is gone, or that is older than `stale_s`, is taken over. Use as a context manager.
+    """
+
+    def __init__(self, repo, what, timeout=900.0, stale_s=6 * 3600.0, poll=2.0, alive=pid_alive, clock=time.time, sleep=time.sleep):
+        d = perf_dir(repo)
+        self.path = None if d is None else d / "lock"
+        self.what, self.timeout, self.stale_s, self.poll = what, timeout, stale_s, poll
+        self.alive, self.clock, self.sleep = alive, clock, sleep
+
+    def _holder(self):
+        try:
+            info = json.loads(self.path.read_text(encoding="utf-8"))
+            return int(info["pid"]), float(info["time"]), str(info.get("what", ""))
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _stale(self):
+        holder = self._holder()
+        if holder is None:  # being written, or garbage: only old files count
+            try:
+                return self.clock() - self.path.stat().st_mtime > 60.0
+            except OSError:
+                return False
+        pid, since, _ = holder
+        return not self.alive(pid) or self.clock() - since > self.stale_s
+
+    def __enter__(self):
+        if self.path is None:
+            return self
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = self.clock() + self.timeout
+        announced = False
+        while True:
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                if self._stale():
+                    print("sub0perf: removing a stale lock")
+                    try:
+                        self.path.unlink()
+                    except OSError:
+                        pass
+                    continue
+                if self.clock() >= deadline:
+                    holder = self._holder()
+                    raise LockTimeout(f"another sub0perf run holds the lock {self.path}"
+                                      + (f" ({holder[2]}, pid {holder[0]})" if holder else ""))
+                if not announced:
+                    holder = self._holder()
+                    print(f"sub0perf: waiting for another run ({holder[2]}, pid {holder[0]}) to finish" if holder
+                          else "sub0perf: waiting for another run to finish", flush=True)
+                    announced = True
+                self.sleep(self.poll)
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(), "time": self.clock(), "what": self.what}, f)
+            return self
+
+    def __exit__(self, *exc):
+        if self.path is not None:
+            holder = self._holder()
+            if holder is not None and holder[0] == os.getpid():
+                try:
+                    self.path.unlink()
+                except OSError:
+                    pass
+        return False
+
+
+ZERO_SHA_CHARS = {"0"}
+
+
+def parse_push_refs(text):
+    """The lines git passes a pre-push hook on stdin: (local ref, local sha, remote ref, remote sha)."""
+    refs = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) == 4:
+            refs.append(tuple(fields))
+    return refs
+
+
+def push_problems(refs, head, clean, resolve=lambda sha: sha):
+    """Reasons the build in the working tree is not what a push sends; empty when it is (or only deletes are pushed).
+
+    `resolve` turns a pushed object into its commit (an annotated tag points at a tag object).
+    """
+    pushed = [r for r in refs if set(r[1]) != ZERO_SHA_CHARS]  # an all-zero local sha deletes the remote ref
+    problems = []
+    if not pushed:
+        return problems
+    if not clean:
+        problems.append("the working tree has uncommitted changes to tracked files, so the benchmarks would measure them and "
+                        "not the commit being pushed; commit or stash them")
+    for local_ref, local_sha, *_ in pushed:
+        commit = resolve(local_sha)
+        if commit != head:
+            problems.append(f"{local_ref} ({commit[:9]}) is not what is checked out (HEAD is {(head or '?')[:9]}), so the build is not "
+                            f"the pushed commit; check it out first")
+    return problems
+
+
+def inconclusive_in(evaluations):
+    """From evaluate() results: (every NOISY or ENVIRONMENT name, the names worth re-measuring).
+
+    A method mismatch (epochs, pinned CPU) makes absolute times inconclusive however many rounds are added, so
+    those are reported but not re-measured.
+    """
+    names, remeasure = set(), set()
+    for rows, pair_rows, env in evaluations:
+        retry = not env.get("method")
+        for r in rows:
+            if r[5] in ("NOISY", "ENVIRONMENT"):
+                names.add(r[0])
+                if retry:
+                    remeasure.add(r[0])
+        for p in pair_rows:
+            if p[4] == "NOISY":
+                names.add(p[0])
+                if retry:
+                    remeasure |= {p[0], p[1]["reference"]}
+    return names, (whole_groups(remeasure, evaluations) if remeasure else set())
+
+
+def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds):
+    """When anything is inconclusive, re-measures its groups once with `extra_rounds` more rounds.
+
+    Returns (inconclusive before, inconclusive after). What is still inconclusive is the caller's to report.
+    """
+    first, remeasure = inconclusive_in(evaluate_all())
+    if not first or not remeasure or extra_rounds <= 0:
+        return first, first
+    print(f"sub0perf: {len(first)} inconclusive result(s) ({', '.join(sorted(first))});"
+          f" re-measuring {len(remeasure)} benchmark(s) once with {extra_rounds} more round(s)", flush=True)
+    remeasure_rounds(remeasure, extra_rounds)
+    final, _ = inconclusive_in(evaluate_all())
+    print(f"sub0perf: still inconclusive: {', '.join(sorted(final)) or 'none'}")
+    return first, final
+
+
 def gate_command(args):
     repo = Path(args.repo or git(".", "rev-parse", "--show-toplevel") or ".")
+    skip = os.environ.get("SUB0MATH_PERF_SKIP")
+    if skip:
+        print(f"sub0perf: pre-push gate skipped (SUB0MATH_PERF_SKIP={skip})")
+        log_event(repo, {"event": "skip", "commit": git_head(repo), "reason": skip})
+        return 0
     d = perf_dir(repo)
     config_path = d / "config.json" if d else None
     if not config_path or not config_path.is_file():
         print("sub0perf: no benchmarks configured for this repository; nothing to gate")
         return 0
-    config = json.loads(config_path.read_text(encoding="utf-8"))
     head = git_head(repo)
     clean = tree_clean(repo)
+    if args.refs_from_stdin:  # a push: what is measured must be what is pushed
+        refs = parse_push_refs(sys.stdin.read())
+        if refs and all(set(r[1]) == ZERO_SHA_CHARS for r in refs):
+            print("sub0perf: only deletions are pushed; nothing to measure")
+            return 0
+        problems = push_problems(refs, head, clean, lambda sha: git(repo, "rev-parse", f"{sha}^{{commit}}") or sha)
+        if problems:
+            print("sub0perf: push refused by the performance gate:")
+            for problem in problems:
+                print(f"  - {problem}")
+            print("  (SUB0MATH_PERF_SKIP=<reason> bypasses the gate and logs the reason; git push --no-verify skips all hooks)")
+            log_event(repo, {"event": "gate-refused", "commit": head, "problems": problems})
+            return 1
+    try:
+        with PerfLock(repo, "gate", args.lock_timeout):
+            return run_gate(args, repo, d, config_path, head, clean)
+    except LockTimeout as e:
+        print(f"sub0perf: {e}; push blocked")
+        return 1
+
+
+def run_gate(args, repo, d, config_path, head, clean):
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     upstream = git(repo, "rev-parse", "@{upstream}")
     blocked = []
     for target, t in config.get("targets", {}).items():
@@ -836,9 +1067,7 @@ def gate_command(args):
         exe = t["exe"]
         names = list_names(exe, "")
         samples, meta, positions, counters = run_rounds(exe, names, args.rounds, args.epochs, args.max_load, args.settle, args.seed)
-        record = {"rounds": meta, "samples": samples, "positions": positions, "counters": counters, "exe": Path(exe).name,
-                  "epochs": args.epochs, "cpu": PIN_CPU,
-                  "host": platform.node(), "machine": platform.machine(), "system": f"{platform.system()} {platform.release()}"}
+        record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed)
         args.baseline = t["baseline"]
         ref_sha, ref = reference_record(repo, target, upstream)
 
@@ -854,9 +1083,15 @@ def gate_command(args):
             extend_rounds(lambda ns, r, first, *rest: run_rounds(exe, ns, r, args.epochs, args.max_load, args.settle, args.seed,
                                                                   first, *rest), names, n, samples, meta, positions, counters)
 
-        # One noisy measurement never blocks a push: whatever regressed is re-measured, and only what persists counts.
+        # Inconclusive (noisy, environment-shifted) results are measured once more with twice the rounds, and a push
+        # is never blocked by what stays inconclusive. One noisy measurement never blocks either: whatever regressed
+        # is re-measured, and only what persists counts.
+        retried, _ = retry_inconclusive(both, rerun, args.rounds)
         confirm_regressions(both, rerun, args.confirm_rounds)
-        save_record(repo, target, record)  # the record before push (with any confirmation rounds)
+        inconclusive = sorted(inconclusive_in(both())[0])
+        record["inconclusive"] = inconclusive
+        record["inconclusive_retried"] = sorted(retried)
+        save_record(repo, target, record)  # the record before push (with any extra rounds)
         print("\n### Against the committed baseline\n")
         rows, pair_rows, regressed_base = report(record, args)
         regressed_ref = []
@@ -880,12 +1115,46 @@ def gate_command(args):
             print("  Fix them, or accept them explicitly and commit the baseline:")
             print(f'    python "{Path(__file__).resolve()}" accept --results "{d / "records" / target / (head + ".json")}"'
                   f' --baseline "{t["baseline"]}" --all-changed --reason "why this is acceptable"')
+        if inconclusive:
+            print(f"\nsub0perf: WARNING: {len(inconclusive)} benchmark(s) of {target} stayed inconclusive after re-measuring with "
+                  f"{args.rounds} more round(s); nothing was proven about them{'' if target in blocked else ', and the push is allowed'}:")
+            for name in inconclusive:
+                print(f"  - {name}")
+            print("  (recorded in the local record and log; re-run the check on a quieter machine to judge them)")
         log_event(repo, {"event": "gate", "target": target, "commit": head, "reference": ref_sha,
-                         "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted})
+                         "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted,
+                         "inconclusive": inconclusive, "seed": args.seed})
     return 1 if blocked else 0
 
 
 HOOK_MARK = "# sub0perf hook"
+PREVIOUS_SUFFIX = ".user"  # a foreign hook that was in the way is renamed to <hook>.user and run first
+
+
+def hook_body(name, python, script, comment):
+    """The sh text of a hook. Paths are shell-quoted (spaces); it does nothing, with a message, when python or the tooling is gone."""
+    lines = ["#!/bin/sh", f"{HOOK_MARK}: {comment}",
+             f"python={shlex.quote(python)}", f"script={shlex.quote(script)}",
+             'previous="$(dirname "$0")/' + name + PREVIOUS_SUFFIX + '"']
+    guard = ['if [ ! -f "$python" ] || [ ! -f "$script" ]; then',
+             '    echo "sub0perf: python ($python) or the tooling ($script) is missing; ' + name + ' hook skipped"',
+             '    exit 0',
+             'fi']
+    if name == "pre-push":  # stdin carries the refs being pushed; the previous hook and ours both need it
+        lines += ['refs="$(cat)"',
+                  'if [ -f "$previous" ]; then',
+                  '    printf \'%s\\n\' "$refs" | "$previous" "$@" || exit $?',
+                  'fi', *guard,
+                  'printf \'%s\\n\' "$refs" | "$python" "$script" gate --repo "$(git rev-parse --show-toplevel)" --refs-from-stdin']
+    else:
+        lines += ['if [ -f "$previous" ]; then',
+                  '    "$previous" "$@" || exit $?',
+                  'fi', *guard,
+                  'if [ "$3" = "1" ]; then',
+                  '    "$python" "$script" note-checkout --repo "$(git rev-parse --show-toplevel)"',
+                  'fi',
+                  'exit 0']
+    return "\n".join(lines) + "\n"
 
 
 def install_hooks_command(args):
@@ -899,25 +1168,26 @@ def install_hooks_command(args):
     config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {"targets": {}}
     config["targets"][args.target] = {"build_dir": str(Path(args.build_dir).resolve()), "exe": str(Path(args.exe).resolve()),
                                       "baseline": str(Path(args.baseline).resolve()), "config": args.config or ""}
-    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8", newline="\n")
+    atomic_write_text(config_path, json.dumps(config, indent=2) + "\n")
     hooks = Path(git(repo, "rev-parse", "--git-path", "hooks") or "")
     if not hooks.is_absolute():
         hooks = repo / hooks
     hooks.mkdir(parents=True, exist_ok=True)
     python = Path(sys.executable).as_posix()
     script = Path(__file__).resolve().as_posix()
-    bodies = {
-        "pre-push": f'#!/bin/sh\n{HOOK_MARK}: performance regression gate (tools/perf/bench_check.py gate)\n'
-                    f'"{python}" "{script}" gate --repo "$(git rev-parse --show-toplevel)"\n',
-        "post-checkout": f'#!/bin/sh\n{HOOK_MARK}: notes the checkout; the first clean build records its measurement\n'
-                         f'[ "$3" = "1" ] && "{python}" "{script}" note-checkout --repo "$(git rev-parse --show-toplevel)"\nexit 0\n',
-    }
-    for name, body in bodies.items():
+    comments = {"pre-push": "performance regression gate (tools/perf/bench_check.py gate)",
+                "post-checkout": "notes the checkout; the first clean build records its measurement"}
+    for name, comment in comments.items():
         path = hooks / name
         if path.is_file() and HOOK_MARK not in path.read_text(encoding="utf-8", errors="replace"):
-            print(f"sub0perf: {path} exists and is not ours; add this line to it yourself:\n  {body.splitlines()[2]}")
-            continue
-        path.write_text(body, encoding="utf-8", newline="\n")
+            previous = hooks / (name + PREVIOUS_SUFFIX)
+            if previous.exists():
+                print(f"sub0perf: {path} exists and is not ours, and {previous.name} is taken; chain to the gate yourself:\n"
+                      f'  "{python}" "{script}" gate --repo "$(git rev-parse --show-toplevel)" --refs-from-stdin')
+                continue
+            os.replace(path, previous)
+            print(f"sub0perf: kept your {name} hook as {previous.name}; the installed hook runs it first")
+        atomic_write_text(path, hook_body(name, python, script, comment))
         try:
             path.chmod(0o755)
         except OSError:
@@ -949,7 +1219,11 @@ def main():
     parser.add_argument("--epochs", type=int, default=0, help="override nanobench epochs (quicker, noisier)")
     parser.add_argument("--confirm-rounds", type=int, default=4,
                         help="auto, gate: extra rounds for just the benchmarks that regressed; only regressions that persist count (0 = off)")
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=1, help="shuffle seed of the rounds (recorded in the records)")
+    parser.add_argument("--lock-timeout", type=float, default=900.0,
+                        help="auto, gate: seconds to wait for another measuring run on this repository before giving up")
+    parser.add_argument("--refs-from-stdin", action="store_true",
+                        help="gate: read the pushed refs from stdin (pre-push hook); refuse a dirty tree or a HEAD that is not pushed")
     parser.add_argument("--max-load", type=float, default=0.20, help="busy fraction of all CPUs above which a round waits")
     parser.add_argument("--settle", type=float, default=30.0, help="seconds to wait for load to fall")
     parser.add_argument("--tolerance", type=float, default=0.10)

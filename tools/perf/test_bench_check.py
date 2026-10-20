@@ -1,8 +1,13 @@
 """Self-test for bench_check.py: synthetic samples, no executables. Run: python -m unittest discover tools/perf"""
 
+import json
+import os
 import random
+import shutil
 import statistics
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -157,6 +162,396 @@ class ConfirmationTest(unittest.TestCase):
         found = bc.regressions_in([bc.evaluate(record(now), baseline, 0.10, 0.05, 0.05, False)])
         self.assertEqual(found[0], {"G, vocab"})
         self.assertEqual(found[1], {"G, vocab", "G, hand-written"})
+
+
+class InconclusiveTest(unittest.TestCase):
+    def setUp(self):
+        self.base = {"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, hand-written": 500.0, "H, vocab": 500.0}
+        self.baseline = bc.baseline_data(record(self.base))
+
+    def noisy_record(self):
+        rec = record(self.base)
+        rec["samples"]["H, vocab"] = [500.0, 800.0, 300.0, 650.0, 420.0]  # far above max_cv
+        return rec
+
+    def evaluations(self, rec):
+        return [bc.evaluate(rec, self.baseline, 0.10, 0.05, 0.05, False)]
+
+    def test_noisy_benchmark_and_its_group_are_found(self):
+        names, remeasure = bc.inconclusive_in(self.evaluations(self.noisy_record()))
+        self.assertIn("H, vocab", names)
+        self.assertEqual(remeasure, {"H, vocab", "H, hand-written"})
+
+    def test_clean_run_is_conclusive(self):
+        self.assertEqual(bc.inconclusive_in(self.evaluations(record(self.base))), (set(), set()))
+
+    def test_retry_remeasures_once_and_reports_what_stays(self):
+        rec = self.noisy_record()
+        calls = []
+        first, final = bc.retry_inconclusive(lambda: self.evaluations(rec), lambda names, n: calls.append((set(names), n)), 3)
+        self.assertEqual(calls, [({"H, vocab", "H, hand-written"}, 3)])
+        self.assertIn("H, vocab", first)
+        self.assertEqual(final, first)  # the stub added nothing, so it is still inconclusive
+
+    def test_retry_that_cures_the_noise_reports_none(self):
+        rec = self.noisy_record()
+
+        def fix(names, n):
+            rec["samples"]["H, vocab"] = [500.0] * ROUNDS
+        first, final = bc.retry_inconclusive(lambda: self.evaluations(rec), fix, 3)
+        self.assertTrue(first)
+        self.assertEqual(final, set())
+
+    def test_conclusive_run_is_not_remeasured(self):
+        bc.retry_inconclusive(lambda: self.evaluations(record(self.base)), lambda *a: self.fail("re-measured"), 3)
+
+    def test_method_mismatch_is_reported_but_not_retried(self):
+        rec = record(self.base)
+        rec["cpu"] = 3
+        baseline = bc.baseline_data(record(self.base))
+        baseline["cpu"] = 5
+        rec["samples"]["G, vocab"] = [1300.0] * ROUNDS
+        evaluations = [bc.evaluate(rec, baseline, 0.10, 0.05, 0.05, False)]
+        names, remeasure = bc.inconclusive_in(evaluations)
+        self.assertEqual(names, {"G, vocab"})
+        self.assertEqual(remeasure, set())
+
+
+class MethodMismatchTest(unittest.TestCase):
+    def method(self, record_cpu, baseline_cpu):
+        times = {"G, hand-written": 1000.0, "G, vocab": 1000.0}
+        rec = record(times)
+        base = bc.baseline_data(record(times))
+        if record_cpu != "absent":
+            rec["cpu"] = record_cpu
+        if baseline_cpu == "absent":
+            del base["cpu"]
+        else:
+            base["cpu"] = baseline_cpu
+        return bc.evaluate(rec, base, 0.10, 0.05, 0.05, False)[2]["method"]
+
+    def test_unpinned_baseline_against_pinned_run_is_flagged(self):
+        note = self.method(7, None)
+        self.assertIn("pinned CPU differs", note)
+        self.assertIn("baseline unpinned", note)
+
+    def test_pinned_baseline_against_unpinned_run_is_flagged(self):
+        self.assertIn("now unpinned", self.method(None, 7))
+
+    def test_different_cpus_are_flagged_and_equal_ones_are_not(self):
+        self.assertIn("pinned CPU differs", self.method(1, 2))
+        self.assertIsNone(self.method(2, 2))
+        self.assertIsNone(self.method(None, None))
+
+    def test_unknown_cpu_is_not_a_mismatch(self):
+        self.assertIsNone(self.method("absent", 3))
+        self.assertIsNone(self.method(3, "absent"))
+
+
+class PushedRefsTest(unittest.TestCase):
+    HEAD = "a" * 40
+    OTHER = "b" * 40
+    ZERO = "0" * 40
+
+    def test_parse(self):
+        text = f"refs/heads/main {self.HEAD} refs/heads/main {self.OTHER}\n\nrefs/heads/x {self.ZERO} refs/heads/x {self.OTHER}\n"
+        self.assertEqual(bc.parse_push_refs(text), [("refs/heads/main", self.HEAD, "refs/heads/main", self.OTHER),
+                                                    ("refs/heads/x", self.ZERO, "refs/heads/x", self.OTHER)])
+        self.assertEqual(bc.parse_push_refs(""), [])
+
+    def refs(self, *shas):
+        return [(f"refs/heads/b{i}", sha, f"refs/heads/b{i}", self.ZERO) for i, sha in enumerate(shas)]
+
+    def test_head_pushed_from_a_clean_tree_is_fine(self):
+        self.assertEqual(bc.push_problems(self.refs(self.HEAD), self.HEAD, True), [])
+
+    def test_dirty_tree_is_refused(self):
+        problems = bc.push_problems(self.refs(self.HEAD), self.HEAD, False)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("uncommitted", problems[0])
+
+    def test_pushing_something_that_is_not_head_is_refused(self):
+        problems = bc.push_problems(self.refs(self.OTHER), self.HEAD, True)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("refs/heads/b0", problems[0])
+
+    def test_one_foreign_ref_among_several_is_refused(self):
+        self.assertEqual(len(bc.push_problems(self.refs(self.HEAD, self.OTHER), self.HEAD, True)), 1)
+
+    def test_deletes_are_ignored(self):
+        self.assertEqual(bc.push_problems(self.refs(self.ZERO), self.HEAD, False), [])
+        self.assertEqual(bc.push_problems(self.refs(self.ZERO, self.HEAD), self.HEAD, True), [])
+
+    def test_tag_objects_resolve_to_their_commit(self):
+        tag = "c" * 40
+        self.assertEqual(bc.push_problems(self.refs(tag), self.HEAD, True, lambda sha: self.HEAD if sha == tag else sha), [])
+
+
+def git_run(repo, *args):
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *args], check=True,
+                   capture_output=True)
+
+
+class RepoTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "my repo"  # with a space, as users have
+        self.repo.mkdir()
+        git_run(self.repo, "init", "-q")
+
+
+class AtomicWriteTest(unittest.TestCase):
+    def test_replaces_content_and_leaves_no_temp_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sub" / "f.json"
+            bc.atomic_write_text(path, "one\n")
+            bc.atomic_write_text(path, "two\n")
+            self.assertEqual(path.read_text(encoding="utf-8"), "two\n")
+            self.assertEqual([p.name for p in path.parent.iterdir()], ["f.json"])
+
+    def test_failed_write_keeps_the_old_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.json"
+            bc.atomic_write_text(path, "old\n")
+            with self.assertRaises(TypeError):
+                bc.atomic_write_text(path, 5)  # not text: the temp file is dropped, the target untouched
+            self.assertEqual(path.read_text(encoding="utf-8"), "old\n")
+            self.assertEqual([p.name for p in path.parent.iterdir()], ["f.json"])
+
+    def test_baseline_and_samples_use_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = bc.make_record("some/bench.exe", {"a": [1.0]}, [], {"a": [0.5]}, {}, 0, 42)
+            bc.write_samples(Path(tmp) / "s.json", rec)
+            bc.write_baseline(Path(tmp) / "b" / "base.json", {"format": 2})
+            self.assertEqual(json.loads((Path(tmp) / "s.json").read_text(encoding="utf-8"))["seed"], 42)
+            self.assertEqual(json.loads((Path(tmp) / "b" / "base.json").read_text(encoding="utf-8")), {"format": 2})
+
+
+class RecordTest(unittest.TestCase):
+    def test_make_record_has_format_exe_and_seed(self):
+        rec = bc.make_record("dir/Bench.exe", {"a": [1.0]}, [{"round": 0}], {"a": [0.5]}, None, 3, 7)
+        self.assertEqual((rec["format"], rec["exe"], rec["epochs"], rec["seed"], rec["counters"]), (2, "Bench.exe", 3, 7, {}))
+        for key in ("cpu", "host", "machine", "system", "rounds", "samples", "positions"):
+            self.assertIn(key, rec)
+
+    def test_saved_record_keeps_the_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git_run(repo, "init", "-q")
+            git_run(repo, "commit", "-q", "--allow-empty", "-m", "c")
+            rec = bc.make_record("b.exe", {"a": [1.0]}, [], {}, {}, 0, 9)
+            path = bc.save_record(repo, "tgt", rec)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["seed"], 9)
+
+
+class AcceptedSinceTest(RepoTestCase):
+    def baseline(self, *accepted):
+        return json.dumps({"accepted": [{"benchmarks": {n: {}}} for n in accepted]})
+
+    def test_reads_the_committed_baseline_not_the_working_tree(self):
+        rel = "perf/baselines/h.json"
+        (self.repo / "perf" / "baselines").mkdir(parents=True)
+        (self.repo / rel).write_text(self.baseline(), encoding="utf-8")
+        git_run(self.repo, "add", ".")
+        git_run(self.repo, "commit", "-q", "-m", "one")
+        ref = bc.git_head(self.repo)
+        (self.repo / rel).write_text(self.baseline("A"), encoding="utf-8")
+        git_run(self.repo, "commit", "-q", "-am", "two")  # A accepted in HEAD
+        self.assertEqual(bc.accepted_since(self.repo, rel, ref), {"A"})
+        (self.repo / rel).write_text(self.baseline("A", "B"), encoding="utf-8")  # uncommitted acceptance does not count
+        self.assertEqual(bc.accepted_since(self.repo, rel, ref), {"A"})
+
+    def test_baseline_missing_at_head_accepts_nothing(self):
+        git_run(self.repo, "commit", "-q", "--allow-empty", "-m", "one")
+        (self.repo / "b.json").write_text(self.baseline("A"), encoding="utf-8")
+        self.assertEqual(bc.accepted_since(self.repo, "b.json", None), set())
+
+
+class LockTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        git_run(self.repo, "commit", "-q", "--allow-empty", "-m", "one")
+
+    def lock(self, **kw):
+        kw.setdefault("sleep", lambda s: None)
+        return bc.PerfLock(self.repo, "test", **kw)
+
+    def test_acquire_and_release(self):
+        lock = self.lock()
+        with lock:
+            self.assertTrue(lock.path.is_file())
+            self.assertEqual(json.loads(lock.path.read_text(encoding="utf-8"))["pid"], os.getpid())
+        self.assertFalse(lock.path.exists())
+
+    def test_released_after_an_exception(self):
+        lock = self.lock()
+        with self.assertRaises(RuntimeError):
+            with lock:
+                raise RuntimeError
+        self.assertFalse(lock.path.exists())
+
+    def test_live_holder_blocks_until_timeout(self):
+        with self.lock():
+            ticks = iter(range(0, 10000, 5))
+            second = self.lock(timeout=20, clock=lambda: next(ticks))
+            with self.assertRaises(bc.LockTimeout):
+                second.__enter__()
+            self.assertTrue(second.path.exists())  # the holder's lock survived
+
+    def test_waiter_gets_the_lock_when_the_holder_releases(self):
+        first = self.lock()
+        first.__enter__()
+        waits = []
+
+        def sleep(s):
+            waits.append(s)
+            first.__exit__(None, None, None)
+        second = self.lock(sleep=sleep)
+        with second:
+            self.assertEqual(len(waits), 1)
+
+    def test_dead_holder_is_taken_over(self):
+        lock = self.lock(alive=lambda pid: False)
+        lock.path.parent.mkdir(parents=True, exist_ok=True)
+        lock.path.write_text(json.dumps({"pid": 99999999, "time": 0, "what": "old"}), encoding="utf-8")
+        with lock:
+            self.assertEqual(json.loads(lock.path.read_text(encoding="utf-8"))["pid"], os.getpid())
+
+    def test_old_lock_of_a_live_pid_is_stale(self):
+        lock = self.lock(alive=lambda pid: True, stale_s=100, clock=lambda: 1000.0)
+        lock.path.parent.mkdir(parents=True, exist_ok=True)
+        lock.path.write_text(json.dumps({"pid": 1, "time": 1.0, "what": "old"}), encoding="utf-8")
+        with lock:
+            pass
+
+    def test_pid_alive(self):
+        self.assertTrue(bc.pid_alive(os.getpid()))
+        self.assertFalse(bc.pid_alive(0))
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        self.assertFalse(bc.pid_alive(child.pid))
+
+
+@unittest.skipUnless(shutil.which("sh"), "needs a POSIX sh")
+class HooksTest(RepoTestCase):
+    def install(self):
+        args = type("A", (), {"repo": str(self.repo), "build_dir": str(self.repo / "build dir"), "target": "tgt",
+                              "exe": str(self.repo / "build dir" / "tgt"), "baseline": str(self.repo / "b.json"), "config": ""})
+        bc.install_hooks_command(args)
+        return Path(bc.git(self.repo, "rev-parse", "--git-path", "hooks"))
+
+    def hooks_dir(self):
+        hooks = Path(bc.git(self.repo, "rev-parse", "--git-path", "hooks"))
+        return hooks if hooks.is_absolute() else self.repo / hooks
+
+    def run_hook(self, name, *args, stdin=""):
+        return subprocess.run(["sh", str(self.hooks_dir() / name), *args], input=stdin, capture_output=True, text=True, cwd=self.repo)
+
+    def test_hook_text_quotes_paths_with_spaces(self):
+        body = bc.hook_body("pre-push", "C:/Program Files/Python/python.exe", "C:/my tools/bench_check.py", "x")
+        self.assertIn("python='C:/Program Files/Python/python.exe'", body)
+        self.assertIn("script='C:/my tools/bench_check.py'", body)
+
+    def test_missing_tooling_makes_the_hook_a_no_op_with_a_message(self):
+        hooks = self.hooks_dir()
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-push").write_text(bc.hook_body("pre-push", "/no/such/python", "/no/such/script.py", "x"), encoding="utf-8", newline="\n")
+        result = self.run_hook("pre-push", "origin", "url", stdin="refs/heads/a " + "1" * 40 + " refs/heads/a " + "0" * 40 + "\n")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("missing", result.stdout)
+
+    def test_install_creates_hooks_and_is_idempotent(self):
+        self.install()
+        first = (self.hooks_dir() / "pre-push").read_text(encoding="utf-8")
+        self.install()
+        self.assertEqual((self.hooks_dir() / "pre-push").read_text(encoding="utf-8"), first)
+        self.assertIn(bc.HOOK_MARK, first)
+        self.assertIn("--refs-from-stdin", first)
+        self.assertTrue((self.hooks_dir() / "post-checkout").is_file())
+
+    def test_foreign_hook_is_kept_and_chained_with_stdin_and_arguments(self):
+        hooks = self.hooks_dir()
+        hooks.mkdir(parents=True, exist_ok=True)
+        out = self.repo / "seen.txt"
+        (hooks / "pre-push").write_text(f'#!/bin/sh\necho "args=$@" > "{out.as_posix()}"\ncat >> "{out.as_posix()}"\n',
+                                         encoding="utf-8", newline="\n")
+        self.install()
+        self.assertTrue((hooks / "pre-push.user").is_file())
+        self.assertIn(bc.HOOK_MARK, (hooks / "pre-push").read_text(encoding="utf-8"))
+        # The user's hook runs first with the arguments and stdin; ours then refuses (the pushed sha is not HEAD).
+        result = self.run_hook("pre-push", "origin", "url", stdin="refs/heads/a " + "1" * 40 + " refs/heads/a " + "0" * 40 + "\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("push refused", result.stdout)
+        seen = out.read_text(encoding="utf-8")
+        self.assertIn("args=origin url", seen)
+        self.assertIn("refs/heads/a", seen)
+
+    def test_failing_user_hook_stops_the_push(self):
+        hooks = self.hooks_dir()
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-push").write_text("#!/bin/sh\nexit 3\n", encoding="utf-8", newline="\n")
+        self.install()
+        self.assertEqual(self.run_hook("pre-push", "origin", "url").returncode, 3)
+
+
+class GateSkipTest(RepoTestCase):
+    def test_skip_bypasses_and_is_logged(self):
+        git_run(self.repo, "commit", "-q", "--allow-empty", "-m", "one")
+        args = type("A", (), {"repo": str(self.repo)})
+        os.environ["SUB0MATH_PERF_SKIP"] = "emergency fix"
+        try:
+            self.assertEqual(bc.gate_command(args), 0)
+        finally:
+            del os.environ["SUB0MATH_PERF_SKIP"]
+        log = (bc.perf_dir(self.repo) / "log.jsonl").read_text(encoding="utf-8")
+        self.assertIn("emergency fix", log)
+        self.assertIn('"skip"', log)
+
+
+class GateRefusalTest(RepoTestCase):
+    """The gate's push checks run before any build: a configured repository with no targets shows them."""
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "f.txt").write_text("one", encoding="utf-8")
+        git_run(self.repo, "add", ".")
+        git_run(self.repo, "commit", "-q", "-m", "one")
+        self.head = bc.git_head(self.repo)
+        bc.atomic_write_text(bc.perf_dir(self.repo) / "config.json", json.dumps({"targets": {}}))
+
+    def gate(self, stdin_text):
+        import io
+        args = type("A", (), {"repo": str(self.repo), "refs_from_stdin": True, "lock_timeout": 1.0})
+        real = sys.stdin
+        sys.stdin = io.StringIO(stdin_text)
+        try:
+            return bc.gate_command(args)
+        finally:
+            sys.stdin = real
+
+    def push(self, sha):
+        return f"refs/heads/main {sha} refs/heads/main {'0' * 40}\n"
+
+    def test_clean_pushed_head_proceeds(self):
+        self.assertEqual(self.gate(self.push(self.head)), 0)
+
+    def test_dirty_tree_is_refused_and_logged(self):
+        (self.repo / "f.txt").write_text("two", encoding="utf-8")
+        self.assertEqual(self.gate(self.push(self.head)), 1)
+        self.assertIn("gate-refused", (bc.perf_dir(self.repo) / "log.jsonl").read_text(encoding="utf-8"))
+
+    def test_untracked_files_do_not_refuse(self):
+        (self.repo / "new.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(self.gate(self.push(self.head)), 0)
+
+    def test_pushing_another_commit_is_refused(self):
+        git_run(self.repo, "commit", "-q", "--allow-empty", "-m", "two")
+        self.assertEqual(self.gate(self.push(self.head)), 1)  # HEAD moved on; the pushed sha is the older commit
+
+    def test_deleting_a_branch_proceeds_even_when_dirty(self):
+        (self.repo / "f.txt").write_text("two", encoding="utf-8")
+        self.assertEqual(self.gate(self.push("0" * 40)), 0)
 
 
 if __name__ == "__main__":
