@@ -3,7 +3,7 @@
 import unittest
 
 from ..baseline import baseline_data
-from .. import confirm, judge, runner
+from .. import confirm, judge, runner, stats
 from .helpers import record, ROUNDS, NAMES
 
 
@@ -74,6 +74,60 @@ class ConfirmationTest(unittest.TestCase):
         found = confirm.regressions_in([judge.evaluate(record(now), baseline, 0.10, 0.05, 0.05, False)])
         self.assertEqual(found[0], {"G, vocab"})
         self.assertEqual(found[1], {"G, vocab", "G, hand-written"})
+
+
+class ModesRoundsTest(unittest.TestCase):
+    """The confirmation pass gathers enough rounds for the two-level test before anything blocks."""
+
+    def setUp(self):
+        self.baseline = baseline_data(record({"G, hand-written": 1000.0, "G, vocab": 1000.0}))
+        self.rec = record({"G, hand-written": 1000.0, "G, vocab": 1000.0}, jitter=0.002)
+        for key in ("rounds",):
+            self.rec[key] = self.rec[key][:3]
+        for n in self.rec["samples"]:
+            self.rec["samples"][n] = self.rec["samples"][n][:3]
+            self.rec["positions"][n] = self.rec["positions"][n][:3]
+        self.rec["samples"]["G, vocab"] = [1150.0, 1152.0, 1000.0]  # the slow level has the median: looks +15%
+        self.requested = []
+
+    def evaluate_all(self):
+        return [judge.evaluate(self.rec, self.baseline, 0.10, 0.05, 0.05, False)]
+
+    def rerun(self, names, n):
+        """Adds n rounds: the benchmark alternates between its two levels, the reference is steady."""
+        self.requested.append((set(names), n))
+        for _ in range(n):
+            k = len(self.rec["rounds"])
+            self.rec["rounds"].append({"round": k, "load": 0.0, "waited_s": 0.0, "quiet": True,
+                                       "calibration_start_ns": 1000.0, "calibration_end_ns": 1000.0})
+            for name in self.rec["samples"]:
+                self.rec["samples"][name].append((1000.0 if k % 2 else 1151.0) if name == "G, vocab" else 1000.0)
+                self.rec["positions"][name].append(0.5)
+
+    def test_rounds_needed_counts_measured_samples_only(self):
+        self.assertEqual(stats.rounds_needed(self.rec, ["G, vocab"]), stats.MODES_MIN_SAMPLES - 3)
+        self.rec["positions"]["G, vocab"][2] = None  # a filled-in copy is not a measurement
+        self.assertEqual(stats.rounds_needed(self.rec, ["G, vocab", "G, hand-written"]), stats.MODES_MIN_SAMPLES - 2)
+        self.assertEqual(stats.rounds_needed(self.rec, ["no such"]), 0)
+
+    def test_looks_regressed_on_the_first_pass(self):
+        self.assertEqual(confirm.regressions_in(self.evaluate_all())[0], {"G, vocab"})
+
+    def test_confirmation_runs_long_enough_for_the_modes_test_and_the_bimodal_benchmark_does_not_block(self):
+        needed = lambda names: stats.rounds_needed(self.rec, names)
+        first, final = confirm.confirm_regressions(self.evaluate_all, self.rerun, 4, needed)
+        self.assertEqual(first, {"G, vocab"})
+        self.assertEqual(self.requested[0][1], stats.MODES_MIN_SAMPLES - 3)  # not just the 4 that were asked for
+        self.assertEqual(final, set())
+
+    def test_a_longer_request_is_kept(self):
+        confirm.confirm_regressions(self.evaluate_all, self.rerun, 20, lambda names: 2)
+        self.assertEqual(self.requested[0][1], 20)
+
+    def test_retrying_the_inconclusive_also_reaches_the_minimum(self):
+        self.rec["samples"]["G, vocab"] = [1000.0, 1300.0, 900.0]  # noisy
+        confirm.retry_inconclusive(self.evaluate_all, self.rerun, 3, lambda names: stats.rounds_needed(self.rec, names))
+        self.assertEqual(self.requested[0][1], stats.MODES_MIN_SAMPLES - 3)
 
 
 class InconclusiveTest(unittest.TestCase):

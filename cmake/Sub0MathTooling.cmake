@@ -168,9 +168,15 @@ function(sub0math_add_benchmark target)
             set(hook_config "")
             set(hook_exe "${CMAKE_CURRENT_BINARY_DIR}/${target}${CMAKE_EXECUTABLE_SUFFIX}")
         endif()
+        # SUB0MATH_PERF_PINS: dependency pins the pre-push hook checks are on the dependency's remote, each
+        # "file=cmake/Dependencies.cmake,var=X_REVISION,repo=owner/name[,checkout=../X][,name=X]" (docs/PERFORMANCE.md).
+        set(pin_args "")
+        foreach(pin IN LISTS SUB0MATH_PERF_PINS)
+            list(APPEND pin_args --pin "${pin}")
+        endforeach()
         execute_process(
             COMMAND ${Python3_EXECUTABLE} "${check}" install-hooks --repo "${PROJECT_SOURCE_DIR}" --build-dir "${CMAKE_BINARY_DIR}"
-                    --target ${target} --exe "${hook_exe}" --baseline "${baseline}" --config "${hook_config}"
+                    --target ${target} --exe "${hook_exe}" --baseline "${baseline}" --config "${hook_config}" ${pin_args}
             RESULT_VARIABLE hook_result)
         if(NOT hook_result EQUAL 0)
             message(WARNING "sub0perf: installing the git hooks failed (${hook_result})")

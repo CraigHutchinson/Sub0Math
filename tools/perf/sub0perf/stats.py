@@ -45,6 +45,15 @@ def modes(values):
     return statistics.median(low), statistics.median(high), gap / centre
 
 
+MODES_MIN_SAMPLES = 10  # measured samples that give the two-level test a fair chance (it needs 5, and 2 on each side)
+
+
+def rounds_needed(record, names, minimum=MODES_MIN_SAMPLES):
+    """How many more rounds the least-measured of `names` needs to reach `minimum` measured samples (0 if none)."""
+    counts = [measured_count(record, n) for n in names if n in record["samples"]]
+    return max(0, minimum - min(counts)) if counts else 0
+
+
 def measured_count(record, name):
     """How many of a benchmark's samples were measured (not filled in by copying a median to keep rounds aligned)."""
     values = record["samples"].get(name, [])

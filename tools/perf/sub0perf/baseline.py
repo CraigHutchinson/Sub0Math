@@ -39,9 +39,11 @@ def baseline_data(record):
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
             "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0), "cpu": record.get("cpu"),
             "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"],
+                               **({"modes": [round(s["modes"][0], 3), round(s["modes"][1], 3)]} if s["modes"] else {}),
                                **{k: round(c["median"], 2) for k, c in s["counters"].items()}}
                            for n, s in sorted(stats.items())},
             "pairs": {n: {"reference": p["reference"], "ratio": round(p["ratio"], 4),
+                          **({"modes": [round(p["modes"][0], 4), round(p["modes"][1], 4)]} if p["modes"] else {}),
                           **({"instruction_ratio": round(p["instruction_ratio"], 4)} if "instruction_ratio" in p else {})}
                       for n, p in sorted(pairs.items())},
             "accepted": []}

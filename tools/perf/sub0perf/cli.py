@@ -8,7 +8,7 @@ noise, and paired comparisons with hand-written references.
   bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
   bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
   bench_check.py gate     [--repo DIR] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
-  bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH
+  bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH  [--pin file=F,var=V,repo=owner/name ...]
 
 How a run is made robust (`run`, and `auto` which runs then checks):
 
@@ -82,6 +82,7 @@ from .judge import evaluate_with
 from .lock import LockTimeout, PerfLock
 from .report import report
 from .runner import fill_unmeasured, measure_all, rerunner, run_rounds
+from .stats import rounds_needed
 
 
 def run_command(args):
@@ -123,11 +124,12 @@ def measure_and_judge(args):
                    positions, counters)
         fill_unmeasured(samples, positions, before)
     rerun = rerunner(args.exe, args, samples, meta, positions, counters)
-    confirm_regressions(lambda: [evaluate_with(record, args.baseline, args, bool(args.filter))], rerun, args.confirm_rounds)
+    confirm_regressions(lambda: [evaluate_with(record, args.baseline, args, bool(args.filter))], rerun, args.confirm_rounds,
+                        lambda names: rounds_needed(record, names))
     if args.out:
         write_samples(args.out, record)
     if args.record and args.target:
-        save_record(Path(args.repo or "."), args.target, record, only_if_missing=True)
+        save_record(Path(args.repo or "."), args.target, record, only_if_missing=True, exe=args.exe)
     _, _, regressed = report(record, args)
     return 0 if args.report_only or not regressed else 1
 
@@ -165,6 +167,9 @@ def main():
     parser.add_argument("--repo", help="git repository (auto --record, gate, install-hooks)")
     parser.add_argument("--target", help="benchmark target name (auto --record, install-hooks)")
     parser.add_argument("--build-dir", help="install-hooks: build directory the gate builds in")
+    parser.add_argument("--pin", action="append", default=[], metavar="file=F,var=V[,repo=owner/name][,checkout=DIR][,name=N]",
+                        help="install-hooks: a dependency pin (CMake `set(V <sha>)` in file F) the gate checks is on the dependency's "
+                             "remote before a push that changes F; repeatable")
     parser.add_argument("--config", help="install-hooks: build configuration for multi-config generators")
     parser.add_argument("--cpu", type=int, default=-1,
                         help="logical CPU to pin measurements to (default: the last one; -2 = do not pin)")

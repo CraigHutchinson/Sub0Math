@@ -62,7 +62,7 @@ same epochs as baselines, so absolute times compare like for like; about 35 s he
 | Environment shifted too far to judge absolute times | When the controls move by more than the tolerance beyond the clock, absolute verdicts become **ENVIRONMENT** (inconclusive, never blocking). Pair ratios and instruction counts are relative to the same environment and still judge. Seen: a +41% shift while another process ran benchmark rounds |
 | Core migration and preemption | Each measurement is pinned to one logical CPU (`--cpu`, default the last) at raised priority. Spreads fell from a 2.7% median and 17.6% worst to 1.1% and 7.6%, and calibration from 0.6% to 0.1% |
 | Other load on the machine | **Load check:** CPU time used by other processes is sampled before each round. Above `--max-load` (20%) the run waits up to `--settle` seconds, then records the round as busy. The report states how many rounds ran busy |
-| Two timing levels from process to process | **Bimodal detection:** a benchmark whose samples form two clusters (largest gap at least 2% of the median and four times the spread inside the clusters, at least two samples each, from five rounds) is checked level by level. A regression needs the *fast* level to be slower than the baseline by more than the threshold, an improvement the slow level faster; if only one level moved, the verdict is **NOISY** (marked `bimodal` in the report), which the gate retries with more rounds and never blocks on. Both levels moving is a real change and keeps its verdict. Pair ratios get the same treatment. See the 2026-10-20 finding for the evidence |
+| Two timing levels from process to process | **Bimodal detection:** a benchmark whose samples form two clusters (largest gap at least 2% of the median and four times the spread inside the clusters, at least two samples each, from five rounds) is checked level by level. A regression needs the *fast* level to be slower than the baseline by more than the threshold, an improvement the slow level faster; if only one level moved, the verdict is **NOISY** (marked `bimodal` in the report), which the gate retries with more rounds and never blocks on. Both levels moving is a real change and keeps its verdict. Pair ratios get the same treatment. See the 2026-10-20 finding for the evidence. Hardening (2026-10-21): a benchmark that is bimodal now or in the baseline is never used as an environment **control** (its level change would be "corrected" into every other benchmark); a baseline stores `modes` `[low, high]` for bimodal benchmarks and pairs, and a shift counts only if it clears the baseline's *slow* level (regression) or *fast* level (improvement), at the clock with and without the controls' correction; the report says `bimodal, both levels moved` when a bimodal row keeps REGRESSED/IMPROVED. The test needs 5 measured samples and 2 per side, so a confirmation or retry pass always gathers at least 10 measured samples (`stats.MODES_MIN_SAMPLES`) for what it re-measures, and the gate measures benchmarks the baseline knows to be bimodal that long from the start |
 | Noise mistaken for change | **Variance:** a robust spread (median absolute deviation) per benchmark across rounds. A change must exceed both the tolerance (10%) and 3x the noise. Spread above `--max-cv` (5%) is **NOISY**: the quick check adds rounds for those benchmarks (up to double) and then reports them as inconclusive, never as passed or failed |
 | Clock-dependent time, and changes too small for timing noise | **Hardware counters, where the OS exposes them** (Linux perf_event on bare metal; not Windows, WSL2 or GitHub's hosted runners, which are virtual machines without the processor's counters). The report and checks use them per op: instructions are nearly deterministic, so they are judged at a 2% tolerance (`--instr-tolerance`) and catch added work that timing noise hides; cycles do not depend on clock speed; IPC and branch-miss rate are shown. Pairs add the instruction ratio against the hand-written reference. A counter regression blocks like a time regression, and `accept` logs counter changes too. Elsewhere the report says counters are unavailable |
 | Host-dependent absolute times | **Pairs:** each hand-written reference's group is reported as a ratio taken from adjacent measurements in the same round. This is nearly independent of the host, so CI and new machines get it without a baseline |
@@ -88,7 +88,24 @@ a hook prints a message and does nothing instead of failing.
   - the record of the upstream commit, or of the nearest earlier commit with one, which is like for
     like on this machine.
 
-  Any regression that persists blocks the push, with the exact command to accept it.
+  Any regression against the baseline that persists blocks the push, with the exact command to accept it.
+
+  **A difference from the local record blocks only if it reproduces.** The record was measured in an
+  earlier session, and a difference from it was twice not the code (BikeDynamics "Suspension fork 4 s"
+  and Sub0Physics "planar tree 10-DOF forward dynamics": REGRESSED against the record, identical
+  times when the two builds were measured alternately). Likely causes, all properties of the *session*
+  and none removable by scaling: the clock and power state, other load and thermal state at the time
+  of the record (the calibration chain tracks the core clock but not cache and memory behaviour, which
+  the dynamics benchmarks are bound by), a bimodal benchmark landing on a different level per process,
+  and few rounds on either side. So each record keeps the benchmark executable that made it
+  (`.git/sub0perf/bins/<target>/<commit>/`, newest 3 kept). A regression against the record is
+  then confirmed by measuring that kept build and the new one alternately (order swapped each round, at
+  least 10 rounds, the regressed groups only) and judging the new build against the *fresh* measurement
+  of the old: only names that still regress block. Names that do not are reported as `not reproduced`
+  (a WARNING, logged as `unreproduced_vs_record`). When the old build was not kept (records made before
+  this existed, or pruned) or cannot run, nothing can be shown and the differences from the record only
+  warn. The committed baseline is not affected: it is the reviewed reference, and a regression against it
+  still blocks after the usual confirmation.
 
   **What is measured is what is pushed.** The hook reads the refs git passes on stdin. It refuses the
   push, saying why, when tracked files have uncommitted changes (the build would include them), or when
@@ -115,6 +132,20 @@ a hook prints a message and does nothing instead of failing.
   **Bypass.** `SUB0MATH_PERF_SKIP=<reason> git push` skips the gate; the reason is printed and logged
   as a `skip` event. (The gate's own build sets it internally so the after-build check does not run.)
 
+  **Dependency pins.** A repository that pins a dependency by commit (`set(X_REVISION <sha>)` read by
+  `CPMAddPackage(... GIT_TAG ${X_REVISION})`) must not push the pin before the dependency itself: CI
+  then fails to fetch it ("unable to read tree"). Pins are declared at hook install, generically, as
+  `install-hooks --pin file=cmake/Dependencies.cmake,var=X_REVISION,repo=owner/name[,checkout=../X][,name=X]`
+  (repeatable; from CMake, the list `SUB0MATH_PERF_PINS`) and kept under `pins` in
+  `.git/sub0perf/config.json`. When the pushed range changes the pin file (a new branch, whose range is
+  unknown, counts), the sha is read from the pushed commit and looked up: `gh api repos/<owner>/<repo>/commits/<sha>`
+  when `gh` is available (404/422 means absent), otherwise the sibling checkout's remote-tracking refs
+  (`git branch -r --contains <sha>`, as fresh as its last fetch). Known absent: the push is refused with
+  `push <name> first`. Unverifiable (offline, no `gh`, commit not in the checkout): a WARNING, the push
+  goes on. A range that leaves the pin file alone, such as a documentation-only push, is not checked,
+  which keeps the check free. It runs before the performance gate and is **not** bypassed by
+  `SUB0MATH_PERF_SKIP`; `SUB0MATH_PINS_SKIP=<reason>` bypasses it, logged as `pins-skip`.
+
   Records (`.git/sub0perf/records/...`), samples files and baselines are written atomically (temp
   file, then replace), and records keep the shuffle `seed` of their rounds.
 
@@ -123,6 +154,8 @@ a hook prints a message and does nothing instead of failing.
   measured again, alone with its pair references, for `--confirm-rounds` more interleaved rounds
   (default 4, calibration as usual); both comparisons are then re-judged with all rounds. The gate
   prints `confirmed:` and `not confirmed:` lists and blocks only on the former. `auto` does the same.
+  The pass is at least long enough to give every re-measured benchmark 10 measured samples (see bimodal
+  detection), so with the default 3 initial rounds it adds 7, not 4, when a benchmark is short of them.
 
   **No controls.** A repository without a hand-written benchmark cannot factor out environment shifts.
   There, a change must also exceed 3x the suite's own spread of changes (median absolute deviation
@@ -143,12 +176,14 @@ package, lowest layer first:
 | `common` | Constants (`CALIBRATION`, `REFERENCE_MARK`), `group_of`, `read_json`, `atomic_write_text`, `tooling_script` |
 | `platform_proc` | CPU pinning and priority, launching a measurement, machine CPU time counters, `pid_alive` |
 | `load` | System load sampling, waiting for a quiet machine |
-| `stats` | Robust CV, bimodal detection (`modes`), calibration-scaled medians (`summarise`), `pair_ratios` |
+| `stats` | Robust CV, bimodal detection (`modes`, `rounds_needed`), calibration-scaled medians (`summarise`), `pair_ratios` |
 | `baseline` | The two file formats: samples record (`make_record`, `write_samples`) and baseline (`baseline_data`, `baseline_tuple`, `write_baseline`) |
 | `gitstate` | `git`, HEAD, clean tree, `.git/sub0perf` (records, log), pushed refs, documentation-only pushes |
 | `runner` | One process per benchmark, interleaved calibrated rounds, `extend_rounds`, `measure_all`, `rerunner` |
 | `judge` | Verdicts for benchmarks, pairs and counters, environment controls, method mismatch; `evaluate`, `verdict_hits` |
 | `confirm` | Confirming regressions, retrying inconclusive results |
+| `reproduce` | Measuring an earlier record's kept build beside the new one to reproduce a difference from the record |
+| `pins` | Dependency pins: parsing, reading the sha, checking it is on the dependency's remote |
 | `report` | The markdown tables and job summary |
 | `accept` | `baseline` and `accept` commands (the logged `accepted` list) |
 | `lock`, `hooks`, `gate` | One run at a time; installing and chaining hooks; the pre-push gate |
@@ -315,6 +350,7 @@ Separately, models should still snap settled states to exact zero where that is 
 | 2026-10-19 | Spatial algebra: carrying an inertia to a parent frame (`X^T I X`) computed the full 3x3 `E^T I E`; the hand-written reference computes the six symmetric entries | Pair `inertia to parent x1024`: 1.15x, then 1.02x (5 interleaved rounds) | `applyInverse(SpatialInertia)` computes the upper triangle and mirrors it |
 | 2026-10-19 | `PluckerTransform` apply/applyInverse runs 0.82x of hand-written scalar code: GCC 16 SLP-vectorises the column-sum form (`Mat * Vec`) but not the scalar expressions, even with stores deferred | Pair `spatial transform x1024`, vectorization remarks | The vocabulary is the fastest form known here; the scalar reference stays as the plain-numbers control |
 | 2026-10-20 | Grid ownership (`cellOf`) with `std::optional`-free `GridCell{index, known}` and a coverage query that clamps in floating point before converting: both at parity with plain scalar code on 1024 inputs, one in six outside the grid | Pairs `grid cellOf x1024` 1.01-1.04x, `grid cellsTouching x1024` 0.99-1.08x (7 interleaved rounds, noisy host) | One deferred finite test in `cellsTouching` (a branch per axis measured 1.08x); bitwise-or of the range tests in `cellOf` |
+| 2026-10-21 | The gate falsely blocked five pushes in two days, each disproved by an interleaved A/B of the two builds (identical times): (1) box vs 1024 blocks (`AabbOverlapTester` forms and the hand-written SAT) alternates between about 1175 and 1390 ns per process, and one row was labelled bimodal yet still REGRESSED (+15%); (2) two pairs REGRESSED against the previous push's local record (1.455x to 1.56x, 1.107x to 1.169x) that A/B showed identical (e.g. 338 vs 338 us); (3) a consumer pushed a dependency pin before the dependency, failing all CI | Gate output and A/B runs of the BikeDynamics and Sub0Physics sessions; the causes below are inferred from the code and the earlier bimodal evidence, not re-measured here. (1) The test needs 5 samples and the gate had 3 to 7, so it often could not run, and a bimodal hand-written control (the SAT is a control) moves the factor applied to every other benchmark by its own level change. (2) A record is another session's measurement; nothing in it can say whether a difference is the code | (1) Bimodal controls excluded, baselines remember two levels, shifts judged against both levels and both scalings, 10 measured samples before blocking. (2) Kept executables and side-by-side re-measurement; a difference from a record blocks only if it reproduces, else warns. (3) Pin check at push time (above). Unit tests use synthetic samples, records and git repositories only |
 | 2026-10-20 | The group `box vs 1024 blocks` (hand-written 2D SAT and both `AabbOverlapTester` forms) moves between two timing levels from process to process (about 5–10%), which produced confirmed REGRESSED verdicts on unrelated pushes | Repeated `--exact` runs pinned to one CPU, interleaved in time, Windows, GCC 16, a host with other agents building (calibration load 8–11%, so not a quiet machine). **(1)** Within one process, per-epoch times shift by 5–10% over seconds and the first epoch can be 20% faster (turbo, then settling); epoch error inside a process is under 1% in a calm moment, so the level is a machine state, not fixed per process. **(2)** The loops read no arrays (centres come from the grid index), so heap or array alignment, the usual suspect, does not apply. **(3)** Disabling ASLR (fixed image base, `--disable-dynamicbase`) left the spread unchanged (n = 40 each, interleaved). **(4)** `-falign-loops=64 -falign-functions=64 -falign-jumps=32` moved medians by at most 3%, in different directions per benchmark: code alignment is a small effect, not the 5–10%. **(5)** The calibration kernel itself varies 4.6–5.6% across processes (tails to +50%) and correlates only 0.2–0.5 with the benchmark times, so scaling by the clock cannot undo it: it is measured in other processes at other moments | There is no source change that removes a machine state, and the benchmark is already free of data layout effects; the hand-written reference is not touched. The fix is in the tooling: bimodal detection (above) turns a one-level shift into NOISY. Not yet shown, for a quiet-machine session: a longer A/B of the baseline entries and an in-process repeat to separate frequency from contention. The three baseline entries were not re-recorded: this host was not quiet, so re-recording is left to the architect via `accept --reason` from fresh samples |
 
 ## Measured (development host, GCC 16, -O3)

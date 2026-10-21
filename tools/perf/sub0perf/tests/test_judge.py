@@ -108,6 +108,86 @@ class BimodalTest(unittest.TestCase):
         self.assertIn("bimodal", report.render(rows, pairs, env, "b.json", 0.10, 0.05))
 
 
+class BimodalGateTest(unittest.TestCase):
+    """What the gate saw: a bimodal benchmark (or its bimodal control) read as a regression, with the label saying bimodal."""
+
+    LOW = [1000.0, 1001.0, 1002.0, 1003.0]
+    HIGH = [1180.0, 1182.0, 1181.0]
+
+    def evaluate(self, base_rec, now_rec):
+        return judge.evaluate(now_rec, baseline_data(base_rec), 0.10, 0.05, 0.05, False)
+
+    def test_bimodal_control_is_not_used_to_correct_the_environment(self):
+        # The control sat at its high level when the baseline was made and at its low level now: -15%, which would make
+        # the steady library benchmark look 18% slower once "corrected".
+        base = record({"G, hand-written": 1180.0, "G, vocab": 1000.0, "H, vocab": 700.0}, jitter=0.002)
+        base["samples"]["G, hand-written"] = [1180.0, 1182.0, 1181.0, 1000.0, 1001.0]
+        now = record({"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, vocab": 700.0}, jitter=0.002)
+        now["samples"]["G, hand-written"] = self.LOW + self.HIGH + [1000.0, 1002.0]
+        for k in ("positions",):
+            now[k]["G, hand-written"] = [0.5] * 9
+        now["rounds"] = now["rounds"] + [dict(now["rounds"][0]) for _ in range(4)]
+        for n in ("G, vocab", "H, vocab"):
+            now["samples"][n] = now["samples"][n] + [now["samples"][n][0]] * 4
+            now["positions"][n] = [0.5] * 9
+        rows, _, env = self.evaluate(base, now)
+        self.assertEqual({r[0]: r[5] for r in rows}["G, vocab"], "ok")
+        self.assertIsNone(env["environment_shift"])
+
+    def test_steady_control_is_still_used(self):
+        base = record({"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, vocab": 700.0}, jitter=0.002)
+        now = record({"G, hand-written": 1050.0, "G, vocab": 1050.0, "H, vocab": 700.0}, jitter=0.002)
+        rows, _, env = self.evaluate(base, now)
+        self.assertAlmostEqual(env["environment_shift"], 0.05, places=2)
+
+    def test_baseline_remembers_its_two_levels(self):
+        rec = record({"G, vocab": 1000.0}, jitter=0.002)
+        rec["samples"]["G, vocab"] = [1000.0, 1002.0, 1150.0, 1155.0, 1152.0]
+        entry = baseline_data(rec)["benchmarks"]["G, vocab"]
+        self.assertEqual(len(entry["modes"]), 2)
+        self.assertLess(entry["modes"][0], entry["modes"][1])
+        steady = baseline_data(record({"G, vocab": 1000.0}))["benchmarks"]["G, vocab"]
+        self.assertNotIn("modes", steady)
+
+    def baseline_with_levels(self):
+        base = record({"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, hand-written": 500.0, "H, vocab": 500.0}, jitter=0.002)
+        base["samples"]["G, vocab"] = [1000.0, 1002.0, 1150.0, 1155.0, 1152.0]  # median in the slow level
+        return base
+
+    def judge_now(self, vocab_samples):
+        now = record({"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, hand-written": 500.0, "H, vocab": 500.0}, jitter=0.002)
+        now["samples"]["G, vocab"] = vocab_samples
+        rows, pairs, _ = self.evaluate(self.baseline_with_levels(), now)
+        return {r[0]: r[5] for r in rows}["G, vocab"]
+
+    def test_steady_value_inside_the_baselines_two_levels_is_not_a_change(self):
+        # The baseline median is ~1152; a steady run at the fast level is -13%, at the slow level 0.
+        self.assertNotIn(self.judge_now([1000.0, 1001.0, 1002.0, 1000.0, 1001.0]), ("IMPROVED", "REGRESSED"))
+
+    def test_steady_value_above_both_baseline_levels_is_a_regression(self):
+        self.assertEqual(self.judge_now([1400.0, 1402.0, 1399.0, 1401.0, 1400.0]), "REGRESSED")
+
+    def test_bimodal_value_above_both_levels_is_a_regression_and_says_so(self):
+        now = record({"G, hand-written": 1000.0, "G, vocab": 1000.0, "H, hand-written": 500.0, "H, vocab": 500.0}, jitter=0.002)
+        now["samples"]["G, vocab"] = [1400.0, 1402.0, 1600.0, 1605.0, 1602.0]
+        rows, pairs, env = self.evaluate(self.baseline_with_levels(), now)
+        self.assertEqual({r[0]: r[5] for r in rows}["G, vocab"], "REGRESSED")
+        self.assertIn("bimodal, both levels moved", report.render(rows, pairs, env, "b.json", 0.10, 0.05))
+
+    def test_a_shift_must_survive_every_reference(self):
+        # Against 1000 the slow level (1150) is a regression; against 1100 (the other scaling) the fast level is not.
+        self.assertEqual(judge.judge_modes("REGRESSED", (1100.0, 1300.0, 0.2), [1000.0, 1150.0], 0.10), "NOISY")
+        self.assertEqual(judge.judge_modes("REGRESSED", (1300.0, 1400.0, 0.1), [1000.0, 1150.0], 0.10), "REGRESSED")
+
+    def test_a_bimodal_reference_range_is_used(self):
+        self.assertEqual(judge.judge_modes("REGRESSED", (1150.0, 1150.0, 0.0), (1000.0, 1150.0), 0.10), "NOISY")
+        self.assertEqual(judge.judge_modes("IMPROVED", (1000.0, 1000.0, 0.0), (1000.0, 1150.0), 0.10), "NOISY")
+
+    def test_other_verdicts_pass_through(self):
+        self.assertEqual(judge.judge_modes("ok", (1.0, 2.0, 1.0), 1.0, 0.1), "ok")
+        self.assertEqual(judge.judge_modes("REGRESSED", None, 1.0, 0.1), "REGRESSED")
+
+
 class MethodMismatchTest(unittest.TestCase):
     def method(self, record_cpu, baseline_cpu):
         times = {"G, hand-written": 1000.0, "G, vocab": 1000.0}

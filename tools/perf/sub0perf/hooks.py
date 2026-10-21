@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .common import atomic_write_text, read_json, tooling_script
 from .gitstate import git, git_head, log_event, perf_dir
+from .pins import parse_pin
 
 
 HOOK_MARK = "# sub0perf hook"
@@ -51,6 +52,14 @@ def install_hooks_command(args):
     config = read_json(config_path) if config_path.is_file() else {"targets": {}}
     config["targets"][args.target] = {"build_dir": str(Path(args.build_dir).resolve()), "exe": str(Path(args.exe).resolve()),
                                       "baseline": str(Path(args.baseline).resolve()), "config": args.config or ""}
+    if getattr(args, "pin", None):
+        try:
+            new_pins = [parse_pin(text) for text in args.pin]
+        except ValueError as error:
+            print(f"sub0perf: {error}")
+            return 2
+        keep = [p for p in config.get("pins", []) if (p["file"], p["var"]) not in {(n["file"], n["var"]) for n in new_pins}]
+        config["pins"] = keep + new_pins
     atomic_write_text(config_path, json.dumps(config, indent=2) + "\n")
     hooks = Path(git(repo, "rev-parse", "--git-path", "hooks") or "")
     if not hooks.is_absolute():

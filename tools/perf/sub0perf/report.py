@@ -6,6 +6,13 @@ from pathlib import Path
 from .judge import evaluate_with, verdict_hits
 
 
+def _bimodal_label(modes, verdict):
+    """' bimodal' for samples at two levels; a regression or improvement that stays says both levels moved."""
+    if not modes:
+        return ""
+    return " bimodal, both levels moved" if verdict in ("REGRESSED", "IMPROVED") else " bimodal"
+
+
 def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
     pct = lambda x: "-" if x is None else f"{x:+.1%}"
     num = lambda x: "-" if x is None else f"{x:,.1f}"
@@ -39,7 +46,7 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
         lines.append("| Benchmark | Baseline ns | Now ns | Raw | Judged | Spread | Verdict |")
         lines.append("|---|---:|---:|---:|---:|---:|---|")
         for name, b, s, raw, change, v in picked:
-            spread = "-" if not s else format(s["cv"], ".1%") + (" bimodal" if s.get("modes") else "")
+            spread = "-" if not s else format(s["cv"], ".1%") + _bimodal_label(s.get("modes"), v)
             base_ns = num(b["median_ns"] if b else None)
             now_ns = num(s["median_ns"] if s else None)
             lines.append(f"| {name} | {base_ns} | {now_ns} | {pct(raw)} | {pct(change)} | {spread} | {v} |")
@@ -75,7 +82,7 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
         for name, p, bp, change, v in pair_rows:
             base_ratio = "-" if not bp else format(bp["ratio"], ".3f") + "x"
             instr = format(p["instruction_ratio"], ".3f") + "x" if "instruction_ratio" in p else "-"
-            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%}{' bimodal' if p.get('modes') else ''} | {instr} | {v} |")
+            lines.append(f"| {name} | {p['reference']} | {p['ratio']:.3f}x | {base_ratio} | {pct(change)} | {p['cv']:.1%}{_bimodal_label(p.get('modes'), v)} | {instr} | {v} |")
     return "\n".join(lines)
 
 

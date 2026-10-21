@@ -1,6 +1,7 @@
 """Git state: refs, HEAD, clean tree, the local records under `.git/sub0perf`, and what a push changes."""
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -42,8 +43,15 @@ def log_event(repo, event):
         f.write(json.dumps(event) + "\n")
 
 
-def save_record(repo, target, record, only_if_missing=False):
-    """Keeps a clean tree's measurement as the record for its commit."""
+KEEP_BINARIES = 3  # benchmark executables kept per target, newest first
+
+
+def save_record(repo, target, record, only_if_missing=False, exe=None):
+    """Keeps a clean tree's measurement as the record for its commit, and the benchmark executable that made it.
+
+    The executable lets a later gate re-measure this commit's build beside the new one, in the same session
+    (see reproduce.py); only the newest KEEP_BINARIES are kept.
+    """
     d = perf_dir(repo)
     head = git_head(repo)
     if d is None or head is None or not tree_clean(repo):
@@ -52,8 +60,32 @@ def save_record(repo, target, record, only_if_missing=False):
     if only_if_missing and path.is_file():
         return path
     atomic_write_text(path, json.dumps({**record, "commit": head}, indent=1) + "\n")
-    log_event(repo, {"event": "record", "target": target, "commit": head})
+    log_event(repo, {"event": "record", "target": target, "commit": head, "binary": keep_binary(d, target, head, exe)})
     return path
+
+
+def keep_binary(perf, target, commit, exe):
+    """Copies the benchmark executable to bins/<target>/<commit>/ and prunes older ones. True when kept."""
+    if not exe or not Path(exe).is_file():
+        return False
+    where = perf / "bins" / target
+    try:
+        (where / commit).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(exe, where / commit / Path(exe).name)
+        old = sorted((p for p in where.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in old[KEEP_BINARIES:]:
+            shutil.rmtree(p, ignore_errors=True)
+    except OSError:
+        return False
+    return True
+
+
+def reference_binary(repo, target, sha):
+    """The benchmark executable kept with the record of `sha`, or None (not kept, or pruned)."""
+    d = perf_dir(repo)
+    where = d / "bins" / target / sha if d and sha else None
+    found = [p for p in where.iterdir() if p.is_file()] if where and where.is_dir() else []
+    return found[0] if found else None
 
 
 def reference_record(repo, target, upstream=None, limit=200):

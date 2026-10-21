@@ -28,15 +28,19 @@ def regressions_in(evaluations):
     return flagged, whole_groups(remeasure, evaluations)
 
 
-def confirm_regressions(evaluate_all, remeasure_rounds, confirm_rounds):
+def confirm_regressions(evaluate_all, remeasure_rounds, confirm_rounds, more_for=None):
     """Judges, and when something regressed re-measures just that and judges again with all rounds.
 
     `evaluate_all()` returns the evaluate() results to inspect; `remeasure_rounds(names, n)` adds rounds.
+    `more_for(names)`, when given, says how many rounds the names need for the two-level (bimodal) test to be possible
+    (see stats.rounds_needed): the confirmation pass is at least that long, because a benchmark that sits at one of two
+    levels from process to process cannot be told from a regression with fewer.
     Returns (first-pass regressions, regressions that persist).
     """
     first, remeasure = regressions_in(evaluate_all())
     if not first or confirm_rounds <= 0:
         return first, first
+    confirm_rounds = max(confirm_rounds, more_for(remeasure) if more_for else 0)
     print(f"sub0perf: {len(first)} regression(s) on the first pass ({', '.join(sorted(first))});"
           f" confirming with {confirm_rounds} more round(s) for {len(remeasure)} benchmark(s)", flush=True)
     remeasure_rounds(remeasure, confirm_rounds)
@@ -77,7 +81,7 @@ def inconclusive_in(evaluations):
     return names, (whole_groups(remeasure, evaluations) if remeasure else set())
 
 
-def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds):
+def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds, more_for=None):
     """When anything is inconclusive, re-measures its groups once with `extra_rounds` more rounds.
 
     Returns (inconclusive before, inconclusive after). What is still inconclusive is the caller's to report.
@@ -85,6 +89,7 @@ def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds):
     first, remeasure = inconclusive_in(evaluate_all())
     if not first or not remeasure or extra_rounds <= 0:
         return first, first
+    extra_rounds = max(extra_rounds, more_for(remeasure) if more_for else 0)
     print(f"sub0perf: {len(first)} inconclusive result(s) ({', '.join(sorted(first))});"
           f" re-measuring {len(remeasure)} benchmark(s) once with {extra_rounds} more round(s)", flush=True)
     remeasure_rounds(remeasure, extra_rounds)

@@ -25,23 +25,52 @@ def judge(change, noise, tolerance, cv, max_cv, spread=0.0):
     return "ok"
 
 
-def judge_modes(verdict, modes, reference, limit):
-    """Demotes a REGRESSED or IMPROVED verdict to NOISY when the samples sit at two levels and only one level moved.
+def _range(reference):
+    """A reference as a (low, high) pair: a single value is a range of one point."""
+    return (reference, reference) if isinstance(reference, (int, float)) else tuple(reference)
 
-    `modes` is stats.modes() of the samples (None when they are not bimodal); `reference` is what they are compared
-    with (the baseline value at the current clock, or the baseline ratio) and `limit` the change that counts.
-    A regression needs the fast level to be slower than the reference by more than the limit, an improvement the
-    slow level to be faster: a shift of one level between processes is a bimodal benchmark, not a change. Both
-    levels moving is a real change and keeps its verdict.
+
+def judge_modes(verdict, modes, references, limit):
+    """Demotes a REGRESSED or IMPROVED verdict to NOISY when the shift is explained by two timing levels.
+
+    `modes` is stats.modes() of the samples (None when they are not bimodal); `references` is what they are compared
+    with: a value, a (low, high) pair (a baseline that was itself bimodal) or a list of those (the same baseline at
+    more than one scaling, when it is unclear how far the environment correction can be trusted). `limit` is the
+    change that counts.
+    A regression needs the fast level to be slower than the reference's slow level by more than the limit, an
+    improvement the slow level to be faster than the reference's fast level: a shift of one level between processes
+    is a bimodal benchmark, not a change. Both levels moving is a real change and keeps its verdict. The shift must
+    survive every reference to keep its verdict. Callers pass (median, median, 0) as `modes` for samples that are not
+    bimodal when the reference is, so a steady value inside the reference's two levels is not a change either.
     """
-    if modes is None or reference <= 0:
+    if verdict not in ("REGRESSED", "IMPROVED") or modes is None:
         return verdict
-    low, high, _ = modes
-    if verdict == "REGRESSED" and low / reference - 1.0 <= limit:
-        return "NOISY"
-    if verdict == "IMPROVED" and high / reference - 1.0 >= -limit:
-        return "NOISY"
+    low, high = modes[0], modes[1]
+    for ref_low, ref_high in (_range(r) for r in (references if isinstance(references, list) else [references])):
+        if ref_low <= 0:
+            continue
+        if verdict == "REGRESSED" and low / ref_high - 1.0 <= limit:
+            return "NOISY"
+        if verdict == "IMPROVED" and high / ref_low - 1.0 >= -limit:
+            return "NOISY"
     return verdict
+
+
+def _levels(stat, base_entry):
+    """The two levels of a benchmark's samples; its median for both when only the baseline is bimodal; else None."""
+    if stat["modes"]:
+        return stat["modes"]
+    return (stat["median_ns"], stat["median_ns"], 0.0) if base_entry.get("modes") else None
+
+
+def _references(base_entry, factor, factor_clock):
+    """The baseline value (or its two levels) at the current clock, with and without the controls' correction.
+
+    The controls' correction is the least certain part, and a bimodal benchmark is often measured beside a
+    bimodal reference, so a shift has to survive both.
+    """
+    low, high = base_entry.get("modes") or (base_entry["median_ns"], base_entry["median_ns"])
+    return [(low * f, high * f) for f in dict.fromkeys((factor, factor_clock))]
 
 
 def _inconclusive(rows):
@@ -77,7 +106,10 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
     # Controls: hand-written references do not use the library under test, so whatever moves them beyond
     # the clock is the environment (cache and memory contention, other load). Their median change is
     # factored out; a library regression cannot hide in it.
-    controls = [n for n in common if REFERENCE_MARK in n]
+    # A bimodal control (it sits at one of two levels from process to process, now or in the baseline) says
+    # nothing about the environment, and would shift every other benchmark by its own level change: left out.
+    factor_clock = factor
+    controls = [n for n in common if REFERENCE_MARK in n and not stats[n]["modes"] and not base[n].get("modes")]
     environment_shift = None
     if not absolute and controls:
         control = statistics.median(stats[n]["median_ns"] / (base[n]["median_ns"] * factor) for n in controls)
@@ -107,7 +139,7 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
         change = changes[name]
         noise = max(s["cv"], b["cv"] or 0.0)
         verdict = judge(change, noise, tolerance, s["cv"], max_cv, spread_floor)
-        verdict = judge_modes(verdict, s["modes"], b["median_ns"] * factor, threshold(noise, tolerance, spread_floor))
+        verdict = judge_modes(verdict, _levels(s, b), _references(b, factor, factor_clock), threshold(noise, tolerance, spread_floor))
         rows.append((name, b, s, raw, change, verdict))
     # When the controls (which do not use the library) moved by more than the tolerance, the environment
     # changed too much for absolute times to support a verdict either way: report them as ENVIRONMENT
@@ -140,7 +172,8 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
         if bp:
             change = p["ratio"] / bp["ratio"] - 1.0
             verdict = judge(change, p["cv"], pair_tolerance, p["cv"], max_cv)
-            verdict = judge_modes(verdict, p["modes"], bp["ratio"], threshold(p["cv"], pair_tolerance))
+            verdict = judge_modes(verdict, p["modes"] or ((p["ratio"], p["ratio"], 0.0) if bp.get("modes") else None),
+                                  _range(bp.get("modes") or bp["ratio"]), threshold(p["cv"], pair_tolerance))
         else:
             change, verdict = None, "new"
         pair_rows.append((name, p, bp, change, verdict))

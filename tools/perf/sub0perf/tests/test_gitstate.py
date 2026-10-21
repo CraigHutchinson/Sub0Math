@@ -88,3 +88,48 @@ class AcceptedSinceTest(RepoTestCase):
         (self.repo / "b.json").write_text(self.baseline("A"), encoding="utf-8")
         self.assertEqual(gitstate.accepted_since(self.repo, "b.json", None), set())
 
+
+
+class KeptBinaryTest(RepoTestCase):
+    """The benchmark executable of a record is kept so a later gate can measure that build again."""
+
+    def commit(self, text):
+        (self.repo / "f.txt").write_text(text, encoding="utf-8")
+        git_run(self.repo, "add", ".")
+        git_run(self.repo, "commit", "-q", "-m", text)
+        return gitstate.git_head(self.repo)
+
+    def exe(self, content):
+        path = self.repo.parent / "bench.exe"
+        path.write_bytes(content)
+        return path
+
+    def test_record_keeps_the_executable_beside_it(self):
+        sha = self.commit("one")
+        gitstate.save_record(self.repo, "t", {"samples": {}}, exe=self.exe(b"build one"))
+        kept = gitstate.reference_binary(self.repo, "t", sha)
+        self.assertEqual(kept.read_bytes(), b"build one")
+        self.assertEqual(kept.name, "bench.exe")
+
+    def test_no_executable_means_no_binary(self):
+        sha = self.commit("one")
+        gitstate.save_record(self.repo, "t", {"samples": {}})
+        self.assertIsNone(gitstate.reference_binary(self.repo, "t", sha))
+        self.assertIsNone(gitstate.reference_binary(self.repo, "t", None))
+
+    def test_only_the_newest_are_kept(self):
+        import os
+        shas = []
+        for i in range(gitstate.KEEP_BINARIES + 2):
+            shas.append(self.commit(f"c{i}"))
+            gitstate.save_record(self.repo, "t", {"samples": {}}, exe=self.exe(f"build {i}".encode()))
+            folder = gitstate.perf_dir(self.repo) / "bins" / "t" / shas[-1]
+            os.utime(folder, (1000 + i, 1000 + i))  # coarse file times must not decide the order
+        kept = [s for s in shas if gitstate.reference_binary(self.repo, "t", s)]
+        self.assertEqual(kept, shas[-gitstate.KEEP_BINARIES:])
+
+    def test_a_dirty_tree_keeps_nothing(self):
+        sha = self.commit("one")
+        (self.repo / "f.txt").write_text("changed", encoding="utf-8")
+        gitstate.save_record(self.repo, "t", {"samples": {}}, exe=self.exe(b"x"))
+        self.assertIsNone(gitstate.reference_binary(self.repo, "t", sha))
