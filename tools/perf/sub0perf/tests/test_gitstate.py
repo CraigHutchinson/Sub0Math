@@ -30,6 +30,8 @@ class PushedRefsTest(unittest.TestCase):
         self.assertFalse(gitstate.documentation_only(new_branch, docs))  # nothing to diff against: measure
         self.assertFalse(gitstate.documentation_only([("refs/heads/x", self.ZERO, "refs/heads/x", self.OTHER)], docs))
         self.assertFalse(gitstate.is_documentation("docsy/a.cpp"))
+        self.assertTrue(gitstate.is_documentation("upstream/bikelab.json"))  # provenance manifests are not built
+        self.assertFalse(gitstate.is_documentation("upstream/patch.cpp"))
 
     def refs(self, *shas):
         return [(f"refs/heads/b{i}", sha, f"refs/heads/b{i}", self.ZERO) for i, sha in enumerate(shas)]
