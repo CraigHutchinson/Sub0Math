@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -709,6 +710,44 @@ void benchSpatialTransform(sub0bench::BenchRunner& runner)
     });
 }
 
+void benchSinCos(sub0bench::BenchRunner& runner, const char* range, double scale)
+{
+    std::vector<double> x(Count);
+    for (std::size_t i = 0; i < Count; ++i)
+    {
+        x[i] = (static_cast<double>(i) / static_cast<double>(Count) * 2.0 - 1.0) * scale;
+    }
+    std::vector<double> out(Count * 2);
+    const std::string r = range;
+
+    // The hand-written twin is the C library call: det:: must stay close to it while being bit-identical everywhere.
+    runner.run(("sin+cos x1024 " + r + ", hand-written std::sin/std::cos").c_str(), [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            out[2 * k] = std::sin(x[k]);
+            out[2 * k + 1] = std::cos(x[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(out.data());
+    });
+    runner.run(("sin+cos x1024 " + r + ", det::sin/det::cos").c_str(), [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            out[2 * k] = det::sin(x[k]);
+            out[2 * k + 1] = det::cos(x[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(out.data());
+    });
+    runner.run(("sin+cos x1024 " + r + ", det::sincos").c_str(), [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            const auto sc = det::sincos(x[k]);
+            out[2 * k] = sc.sin;
+            out[2 * k + 1] = sc.cos;
+        }
+        ankerl::nanobench::doNotOptimizeAway(out.data());
+    });
+}
+
 } // namespace
 
 
@@ -739,5 +778,8 @@ int main(int argc, char** argv)
     benchRayTriangle(runner);
     benchGrid(runner);
     benchSpatialTransform(runner);
+    benchSinCos(runner, "|x|<=4", 4.0);
+    benchSinCos(runner, "|x|<=1000", 1000.0);
+    benchSinCos(runner, "|x|<=1e6", 1.0e6);
     return runner.finish();
 }

@@ -44,6 +44,27 @@ double aliases and literals. Rules:
   `+`/`-` (where the float operand widens) does not compile: convert first.
 - A translation unit uses one literal namespace; using both is ambiguous by design.
 
+## Deterministic transcendentals
+
+Simulation state must be bit-identical across Windows, Linux and macOS. IEEE-754 fixes `+ - * / sqrt` exactly
+but not `sin`, `cos`, `exp`, `pow` and the rest: each C library rounds them differently (a pinned ring digest
+matched on every Windows build and differed on Linux and macOS, with libm `sin`/`cos` the only cause).
+`sub0math::det` (`number/det_math.hpp`) therefore supplies our own, and state paths use them in place of `<cmath>`.
+
+- **Algorithm:** Sun fdlibm (`__kernel_sin`, `__kernel_cos`, `__ieee754_rem_pio2` with Payne-Hanek for huge
+  arguments), the code behind V8's `Math.sin`/`Math.cos`. Results are bit-identical to V8, which gives
+  JavaScript parity for ports. Under 0.8 ulp worst case over 60,000 inputs of every magnitude. The fdlibm
+  notice is preserved in the header and in `NOTICE.md`; its terms are compatible with the MIT licence.
+- **Provided:** `det::sin`, `det::cos`, `det::sincos` (one shared reduction), double and float (float is
+  the double result rounded, so it is deterministic too), `constexpr` and `noexcept`; any finite input,
+  NaN for infinities and NaN. Not yet provided: `tan`, `atan2`, `exp`, `log`, `pow`; a call site that needs one
+  on state adds it here (fdlibm again), not a libm call.
+- **Units:** the `Angle`-typed `sin`, `cos` and the new `sincos` call `det::`; `tan` still calls the C library
+  and is documented as unfit for state. `sqrt` stays `std::sqrt` (exactly rounded by IEEE).
+- **Contract:** only `+ - *` and exact scaling are used, so the bits depend on the compiler not fusing
+  multiply-add: build with `sub0math_target_deterministic_fp` (`-ffp-contract=off`). Measured: identical with
+  GCC, GCC `-march=x86-64-v3` and Clang `-march=x86-64-v3`.
+
 ## Roles
 
 `Role<Tag, T>` wraps a value with a role. Explicit construction, no conversion between roles, no

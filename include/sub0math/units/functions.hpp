@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "sub0math/number/det_math.hpp"
 #include "sub0math/number/real.hpp"
 #include "sub0math/units/dimension.hpp"
 #include "sub0math/units/quantity.hpp"
@@ -38,13 +39,15 @@ template<typename D, Real Rep>
 /**
  * Computes the sine of an angle; only angles are accepted, so degrees cannot be passed by mistake.
  *
+ * Uses the deterministic `det::sin`, not the C library: the same bits on every platform.
+ *
  * @param angle An angle.
  * @return Its sine.
  */
 template<Real Rep>
-[[nodiscard]] Rep sin(const Quantity<dim::Angle, Rep>& angle) noexcept
+[[nodiscard]] constexpr Rep sin(const Quantity<dim::Angle, Rep>& angle) noexcept
 {
-    return std::sin(angle.si());
+    return det::sin(angle.si());
 }
 
 /**
@@ -54,13 +57,26 @@ template<Real Rep>
  * @return Its cosine.
  */
 template<Real Rep>
-[[nodiscard]] Rep cos(const Quantity<dim::Angle, Rep>& angle) noexcept
+[[nodiscard]] constexpr Rep cos(const Quantity<dim::Angle, Rep>& angle) noexcept
 {
-    return std::cos(angle.si());
+    return det::cos(angle.si());
 }
 
 /**
- * Computes the tangent of an angle.
+ * Computes the sine and cosine of an angle with one argument reduction; equal to `sin` and `cos`.
+ *
+ * @param angle An angle.
+ * @return Its sine and cosine.
+ */
+template<Real Rep>
+[[nodiscard]] constexpr det::SinCos<Rep> sincos(const Quantity<dim::Angle, Rep>& angle) noexcept
+{
+    return det::sincos(angle.si());
+}
+
+/**
+ * Computes the tangent of an angle with the C library: not bit-identical across platforms, so keep it off
+ * simulation state.
  *
  * @param angle An angle.
  * @return Its tangent.
