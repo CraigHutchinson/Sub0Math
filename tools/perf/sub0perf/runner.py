@@ -42,6 +42,25 @@ def list_names(exe, text_filter):
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+# The quiet-wait idles the pinned CPU, and its clock drops: a calibration taken straight after it read about 1.8x the
+# warm value (9,030 vs 4,900 ns, every round on 2026-10-27), and interpolating samples towards it distorted every
+# scaled median. Repeat until two consecutive readings agree, so the reading is taken at the working clock.
+CALIBRATION_AGREEMENT = 0.05
+CALIBRATION_ATTEMPTS = 6
+
+
+def steady_calibration(read):
+    """Calls `read()` (one calibration measurement) until two consecutive values agree within CALIBRATION_AGREEMENT,
+    at most CALIBRATION_ATTEMPTS times, and returns the last value."""
+    previous = read()
+    for _ in range(CALIBRATION_ATTEMPTS - 1):
+        value = read()
+        if abs(value - previous) <= CALIBRATION_AGREEMENT * min(value, previous):
+            return value
+        previous = value
+    return previous
+
+
 def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0, samples=None, meta=None, positions=None,
                counters=None):
     samples = samples if samples is not None else {n: [] for n in names}
@@ -56,7 +75,7 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
         for r in range(first_round, first_round + rounds):
             rng = random.Random(seed * 1000003 + r)
             load, waited, quiet = wait_for_quiet(max_load, settle)
-            cal_start = measure(exe, ["--calibration", *extra], scratch)[CALIBRATION]
+            cal_start = steady_calibration(lambda: measure(exe, ["--calibration", *extra], scratch)[CALIBRATION])
             order = list(groups)
             rng.shuffle(order)
             sequence = []
@@ -71,7 +90,7 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
                     counters.setdefault(n, {}).setdefault(key, []).append(value)
                 # Where in the round it ran (0 = start, 1 = end), to interpolate the clock between calibrations.
                 positions.setdefault(n, []).append(round((k + 0.5) / len(sequence), 4))
-            cal_end = measure(exe, ["--calibration", *extra], scratch)[CALIBRATION]
+            cal_end = steady_calibration(lambda: measure(exe, ["--calibration", *extra], scratch)[CALIBRATION])
             meta.append({"round": r, "load": round(load, 4), "waited_s": round(waited, 1), "quiet": quiet,
                          "calibration_start_ns": cal_start, "calibration_end_ns": cal_end})
             print(f"round {r + 1}: load {load:.0%}{'' if quiet else ' (busy)'}, calibration {cal_start:,.0f}/{cal_end:,.0f} ns,"
