@@ -12,6 +12,9 @@
 #         <target>_check            judge those rounds against perf/baselines/<host>.json; fails on a regression
 #         <target>_baseline         record perf/baselines/<host>.json from the same rounds (needs a reason once
 #                                   a baseline exists: bench_check.py baseline --reason ...)
+#       The pre-push gate and the after-build check run at the quick level (a time budget, SUB0MATH_PERF_QUICK_BUDGET;
+#       pairs and controls always, the other benchmarks rotating) unless the push carries a tag matching
+#       SUB0MATH_PERF_FULL_REFS or SUB0MATH_PERF_LEVEL=full is set: docs/PERFORMANCE.md, "Levels".
 #       and installs the pre-push gate and post-checkout hooks (SUB0MATH_PERF_GIT_HOOKS, off on CI),
 #       and, unless SUB0MATH_PERF_ON_BUILD is OFF, a quick check after every rebuild of <target>
 #       (its code or a header it uses changed), reporting regressions and progressions implicitly.
@@ -19,6 +22,14 @@
 #         <target>_vtune_uarch      VTune microarchitecture exploration
 #         <target>_advisor_roofline Intel Advisor vectorization survey and roofline
 #         <target>_perf_record      Linux perf sampling with call graphs
+#
+#   sub0math_add_test(<name> [FULL] COMMAND <command> [args...])
+#       add_test() that can label a long suite FULL (ctest label "full"). `ctest -LE full` is then the quick
+#       run for everyday work; plain `ctest` runs everything (milestones, CI). Tests made by a discovery macro
+#       are labelled with its own argument: gtest_discover_tests(<t> PROPERTIES LABELS full) or
+#       doctest_discover_tests(<t> ADD_LABELS 1 TEST_SUFFIX ...) / catch_discover_tests(<t> PROPERTIES LABELS full).
+#   sub0math_label_full_tests(<test>...)
+#       Adds the "full" label to tests that already exist (same directory scope).
 #
 # Consumers include this file from the Sub0Math source tree (CPM sets Sub0Math_SOURCE_DIR).
 
@@ -37,6 +48,10 @@ set(SUB0MATH_PERF_ON_BUILD "REPORT" CACHE STRING
     "After a benchmark executable is rebuilt: OFF, REPORT (print regressions and progressions) or ENFORCE (fail the build on a regression)")
 set_property(CACHE SUB0MATH_PERF_ON_BUILD PROPERTY STRINGS OFF REPORT ENFORCE)
 set(SUB0MATH_PERF_QUICK_ROUNDS "3" CACHE STRING "Rounds for the after-build check (noisy benchmarks get up to twice as many)")
+set(SUB0MATH_PERF_QUICK_BUDGET "90" CACHE STRING
+    "Target seconds of measuring for the quick level (the pre-push gate and the after-build check); 0 = no budget. Override per run with SUB0MATH_PERF_BUDGET or --budget")
+set(SUB0MATH_PERF_FULL_REFS "v*;milestone/*" CACHE STRING
+    "Tag-name patterns (a list): pushing a matching tag runs the pre-push gate at the full level. Override a run with SUB0MATH_PERF_LEVEL=full|quick")
 set(SUB0MATH_PERF_QUICK_EPOCHS "0" CACHE STRING
     "nanobench epochs in the after-build check; 0 = default, the same method as baselines and records")
 if(DEFINED ENV{CI})
@@ -109,6 +124,34 @@ function(sub0math_target_deterministic_fp target)
     endif()
 endfunction()
 
+# Quality gates come in the same two levels as the performance gate. A suite that takes long is labelled
+# "full"; everyday runs exclude it (ctest -LE full, or the "quick" test preset), milestones and CI run everything.
+set(SUB0MATH_FULL_TEST_LABEL "full")
+
+function(sub0math_label_full_tests)
+    foreach(test IN LISTS ARGN)
+        if(NOT TEST ${test})
+            message(FATAL_ERROR "sub0math_label_full_tests: no test named '${test}' in this directory")
+        endif()
+        get_test_property(${test} LABELS existing)
+        if(existing STREQUAL "NOTFOUND")
+            set(existing "")
+        endif()
+        set_tests_properties(${test} PROPERTIES LABELS "${existing};${SUB0MATH_FULL_TEST_LABEL}")
+    endforeach()
+endfunction()
+
+function(sub0math_add_test name)
+    cmake_parse_arguments(PARSE_ARGV 1 T "FULL" "" "COMMAND")
+    if(NOT T_COMMAND)
+        message(FATAL_ERROR "sub0math_add_test(<name> [FULL] COMMAND <command> [args...]): COMMAND is required")
+    endif()
+    add_test(NAME ${name} COMMAND ${T_COMMAND})
+    if(T_FULL)
+        sub0math_label_full_tests(${name})
+    endif()
+endfunction()
+
 function(sub0math_add_benchmark target)
     get_filename_component(tooling "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/perf" ABSOLUTE)
     get_filename_component(vendor "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tests/vendor" ABSOLUTE)
@@ -153,6 +196,7 @@ function(sub0math_add_benchmark target)
             COMMAND ${CMAKE_COMMAND} -E echo "perf: quick interleaved check of ${target} (SUB0MATH_PERF_ON_BUILD=${SUB0MATH_PERF_ON_BUILD})"
             COMMAND ${Python3_EXECUTABLE} "${check}" auto --exe $<TARGET_FILE:${target}> --baseline "${baseline}"
                     --rounds ${SUB0MATH_PERF_QUICK_ROUNDS} --epochs ${SUB0MATH_PERF_QUICK_EPOCHS}
+                    --budget ${SUB0MATH_PERF_QUICK_BUDGET}
                     --out "${CMAKE_BINARY_DIR}/perf/${target}.quick.json" ${mode_args}
                     --record --target ${target} --repo "${PROJECT_SOURCE_DIR}"
             VERBATIM)
@@ -177,6 +221,7 @@ function(sub0math_add_benchmark target)
         execute_process(
             COMMAND ${Python3_EXECUTABLE} "${check}" install-hooks --repo "${PROJECT_SOURCE_DIR}" --build-dir "${CMAKE_BINARY_DIR}"
                     --target ${target} --exe "${hook_exe}" --baseline "${baseline}" --config "${hook_config}" ${pin_args}
+                    --full-refs "${SUB0MATH_PERF_FULL_REFS}" --quick-budget ${SUB0MATH_PERF_QUICK_BUDGET}
             RESULT_VARIABLE hook_result)
         if(NOT hook_result EQUAL 0)
             message(WARNING "sub0perf: installing the git hooks failed (${hook_result})")

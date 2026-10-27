@@ -148,6 +148,21 @@
             }
         },
         {
+            "name": "quick",
+            "displayName": "Everyday tests: everything except suites labelled full",
+            "inherits": "default",
+            "filter": {
+                "exclude": {
+                    "label": "full"
+                }
+            }
+        },
+        {
+            "name": "full",
+            "displayName": "Milestone tests: every suite, labelled full or not",
+            "inherits": "default"
+        },
+        {
             "name": "ci-unix",
             "configurePreset": "ci-unix",
             "output": {
