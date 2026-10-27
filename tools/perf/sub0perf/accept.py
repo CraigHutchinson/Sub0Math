@@ -11,8 +11,32 @@ from .runner import COUNTERS
 from .stats import measured_count
 
 
+# A run whose calibration kernel swung by more than this between rounds was measured in an unsteady machine state
+# (seen: 5,046 vs 9,042 ns in one run, which scaled every median by up to 40%); a baseline must not come from it.
+MAX_CALIBRATION_SPREAD = 1.25
+
+
+def calibration_spread(record):
+    """Largest over smallest calibration time across the run's rounds (1.0 when there is nothing to compare)."""
+    values = [v for r in record.get("rounds", []) for v in (r.get("calibration_start_ns"), r.get("calibration_end_ns"))
+              if isinstance(v, (int, float)) and v > 0]
+    return max(values) / min(values) if len(values) >= 2 else 1.0
+
+
+def unsteady(record, source):
+    """Prints why and returns True when the record's calibration was too unsteady to record a baseline from."""
+    spread = calibration_spread(record)
+    if spread > MAX_CALIBRATION_SPREAD:
+        print(f"bench_check: calibration varied {spread:.2f}x across the rounds of {source} (limit {MAX_CALIBRATION_SPREAD}x);"
+              f" the machine was not steady, so it cannot become a baseline. Re-measure on a quiet machine")
+        return True
+    return False
+
+
 def baseline_command(args):
     record = read_json(args.results)
+    if unsteady(record, args.results):
+        return 2
     data = baseline_data(record)
     path = Path(args.baseline)
     if path.is_file():
@@ -55,6 +79,8 @@ def accept_command(args):
     if empty:
         print(f"bench_check: no measured samples in {args.results} for: {', '.join(empty)}\n"
               f"  measure them first, e.g. `run --exe ... --filter \"<name or group>\" --out samples.json`, then accept from that file")
+        return 2
+    if unsteady(record, args.results):
         return 2
     scale = (data.get("calibration_ns") or fresh["calibration_ns"]) / fresh["calibration_ns"]
     changes = {}

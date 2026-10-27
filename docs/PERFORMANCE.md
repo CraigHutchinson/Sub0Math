@@ -204,6 +204,10 @@ has only filled-in copies of a median, is an error naming it (exit 2, baseline u
 silent no-change entry. Measure it first, for example `bench_check.py run --exe <bench> --filter "<name or
 group>" --out samples.json`, then accept from that file.
 
+`accept` and `baseline` also refuse a run whose calibration kernel varied by more than 1.25x across its
+rounds (exit 2, baseline untouched), because the machine was not steady. In one run the calibration read
+5,046 ns and 9,042 ns, and scaling by it moved every accepted median by 30–40%. Re-measure on a quiet machine.
+
 This moves those benchmarks' baseline (and pair ratios) to the new measurement and appends an entry to
 the baseline's `accepted` log: date, commit, reason, before and after. Commit the file with the change.
 The gate then lets a regression through against the earlier record only if an acceptance for that

@@ -76,3 +76,18 @@ class AcceptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SteadinessTest(unittest.TestCase):
+    def test_spread_of_calibration_across_rounds(self):
+        rec = {"rounds": [{"calibration_start_ns": 5000.0, "calibration_end_ns": 5100.0},
+                          {"calibration_start_ns": 9042.0, "calibration_end_ns": 5046.0}]}
+        self.assertAlmostEqual(accept.calibration_spread(rec), 9042.0 / 5000.0)
+        self.assertEqual(accept.calibration_spread({"rounds": []}), 1.0)
+
+    def test_unsteady_run_cannot_become_a_baseline(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertTrue(accept.unsteady({"rounds": [{"calibration_start_ns": 5000.0, "calibration_end_ns": 9000.0}]}, "s.json"))
+            self.assertFalse(accept.unsteady({"rounds": [{"calibration_start_ns": 5000.0, "calibration_end_ns": 5400.0}]}, "s.json"))
+        self.assertIn("not steady", out.getvalue())
