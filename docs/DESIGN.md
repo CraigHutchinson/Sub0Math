@@ -93,10 +93,12 @@ needs them, and the API is refined by using it (ADR 0002).
 | Shape | Queries | First consumer |
 |---|---|---|
 | `Sphere<T, N>` (`Circle<T>`) | `contains`, `boundingBox` | Terrain clearance probe |
-| `Segment<T, N>` | `closestPoint` (with exact end parameters), `boundingBox` | Terrain clearance probe |
+| `Segment<T, N>` | `closestPoint` (with exact end parameters), `closestPoints` between two segments (closed form, any N, exact end parameters), `boundingBox` | Terrain clearance probe; casing edge distances |
 | `Aabb<T, N>` | `contains`, `intersects`, `including` | Bounds everywhere |
 | `OrientedBox<T, N>` | `closestPoint`, `contains`, `boundingBox`, `overlaps` with boxes (separating axes, 2D and 3D); `AabbOverlapTester` for one box against many blocks | Terrain corridor sweep boxes and coverage blocks |
-| `Capsule<T, N>` | `signedDistance`, `contains`, `boundingBox` | Wheel interaction envelope |
+| `Capsule<T, N>` | `signedDistance`, `contains`, `boundingBox`; `contact` with a `Segment` (any N) and a `ConvexPolygon` (2D), returning `CapsuleContact` (signed gap, axis point, capsule point and a `Witness` on the other shape) | Wheel interaction envelope; casing edges against terrain pieces |
+| `ConvexPolygon<T, K>` | Fixed vertex count, counter-clockwise, with outward unit edge normals (`fromVertices`); `vertexNormalCone` (`NormalCone::contains`), `boundingBox` | Terrain pieces (prisms of a polyline) for exact casing contact |
+| `Witness<T, N>` | `{point, normal, kind, index}` with `WitnessKind` `Vertex`, `Edge` or `Face`: the feature that answers a query, never an averaged normal | Every nearest-point and contact query; Sub0Physics' `Witness2`/`Witness3` are aliases of it |
 | `Plane<T, N>` | `signedDistance`, `closestPoint`, `Plane::through` | Ground and ramp references |
 | `Triangle<T, N>` | `closestPoint` reporting the vertex, edge or face it lies on; `normal`; `boundingBox` | Exact terrain height queries |
 | `Ray<T, N>` | `intersect` with `Triangle` (Moller–Trumbore) and `Plane` | Rays along a wheel's support normal |
@@ -105,7 +107,9 @@ needs them, and the API is refined by using it (ADR 0002).
 Directions (`Plane::normal`, `Ray::direction`, box axes) are plain unit vectors; only positions and
 extents carry the coordinate unit, so a length can never be passed as a direction. The shapes added on
 2026-10-16 serve the terrain plan's groundwork (steps G1–G3), whose needs were measured first by the D0
-experiment. Converting a shape to
+experiment. The contact shapes added on 2026-10-27 (step M2b of the deformable wheel) are planar first: the polygon
+contact is 2D and floating-point only, while the segment pair, the capsule-segment contact and `Witness` work in any
+dimension and with quantities. Converting a shape to
 triangles will be a function (`toMesh(shape, ...)`), not a type. Purposes that carry their own data
 (collision materials, render materials) belong to the layer that owns that data.
 

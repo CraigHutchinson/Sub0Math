@@ -1,9 +1,13 @@
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include <algorithm>
+#include <array>
 #include <bench_runner.hpp>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <utility>
 #include <vector>
 
 #include "sub0math/sub0math.hpp"
@@ -163,6 +167,202 @@ HeightTriangles makeHeightTriangles()
             add(x, y, z(i, j), x + 0.01, y + 0.01, z(i + 1, j + 1), x, y + 0.01, z(i, j + 1));
         }
     return h;
+}
+
+// A casing ring of 64 capsule edges (skin 8 mm) pressed onto a 40 mm square block made of four terrain slabs: the
+// kernel of exact contact geometry. Hand-written twin: the same closed form on raw doubles (ends against the edges they
+// face, the support vertex against the axis interior, separating axes when the axis crosses). Both sum the gaps and
+// witness indices, checked equal before timing.
+struct SlabTwin
+{
+    double vx[4], vy[4], nx[4], ny[4];
+};
+
+struct TwinOut
+{
+    double gap, px, py, nx, ny;
+    std::size_t index;
+};
+
+TwinOut capsuleQuadTwin(const SlabTwin& p, double ax, double ay, double bx, double by, double radius)
+{
+    const double abx = bx - ax;
+    const double aby = by - ay;
+    const double ab2 = abx * abx + aby * aby;
+    double oa[4], ob[4];
+    double edgeGap = -1e300;
+    std::size_t edgeAxis = 0;
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+        oa[i] = p.nx[i] * (ax - p.vx[i]) + p.ny[i] * (ay - p.vy[i]);
+        ob[i] = p.nx[i] * (bx - p.vx[i]) + p.ny[i] * (by - p.vy[i]);
+        const double g = std::min(oa[i], ob[i]);
+        if (g > edgeGap)
+        {
+            edgeGap = g;
+            edgeAxis = i;
+        }
+    }
+    double lo = 1e300, hi = -1e300;
+    std::size_t loV = 0, hiV = 0;
+    for (std::size_t k = 0; k < 4; ++k)
+    {
+        const double o = -aby * (p.vx[k] - ax) + abx * (p.vy[k] - ay);
+        if (o < lo)
+        {
+            lo = o;
+            loV = k;
+        }
+        if (o > hi)
+        {
+            hi = o;
+            hiV = k;
+        }
+    }
+    const bool misses = ab2 > 0.0 && (lo > 0.0 || hi < 0.0);
+    if (edgeGap > 0.0 || misses)
+    {
+        double best = 1e300;
+        double sx = 0.0, sy = 0.0, wx = 0.0, wy = 0.0;
+        std::size_t index = 0;
+        bool edge = false;
+        const auto end = [&](double ex, double ey, const double* o) {
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                if (!(o[i] > 0.0))
+                {
+                    continue;
+                }
+                const std::size_t j = (i + 1) & 3U;
+                const double dx = p.vx[j] - p.vx[i];
+                const double dy = p.vy[j] - p.vy[i];
+                const double t = std::clamp(((ex - p.vx[i]) * dx + (ey - p.vy[i]) * dy) / (dx * dx + dy * dy), 0.0, 1.0);
+                const double qx = t == 0.0 ? p.vx[i] : (t == 1.0 ? p.vx[j] : p.vx[i] + dx * t);
+                const double qy = t == 0.0 ? p.vy[i] : (t == 1.0 ? p.vy[j] : p.vy[i] + dy * t);
+                const double d2 = (ex - qx) * (ex - qx) + (ey - qy) * (ey - qy);
+                if (d2 < best)
+                {
+                    best = d2;
+                    index = t == 1.0 ? j : i;
+                    edge = t != 0.0 && t != 1.0;
+                    sx = ex;
+                    sy = ey;
+                    wx = qx;
+                    wy = qy;
+                }
+            }
+        };
+        end(ax, ay, oa);
+        end(bx, by, ob);
+        if (misses)
+        {
+            const std::size_t v = lo > 0.0 ? loV : hiV;
+            const double t = ((p.vx[v] - ax) * abx + (p.vy[v] - ay) * aby) / ab2;
+            if (t > 0.0 && t < 1.0)
+            {
+                const double ox = ax + abx * t;
+                const double oy = ay + aby * t;
+                const double d2 = (ox - p.vx[v]) * (ox - p.vx[v]) + (oy - p.vy[v]) * (oy - p.vy[v]);
+                if (d2 < best)
+                {
+                    best = d2;
+                    index = v;
+                    edge = false;
+                    sx = ox;
+                    sy = oy;
+                    wx = p.vx[v];
+                    wy = p.vy[v];
+                }
+            }
+        }
+        const double d = std::sqrt(best);
+        const double nx = edge ? p.nx[index] : (sx - wx) / d;
+        const double ny = edge ? p.ny[index] : (sy - wy) / d;
+        return {d - radius, wx, wy, nx, ny, index};
+    }
+    const double inv = 1.0 / std::sqrt(ab2);
+    const double seg = std::max(-hi * inv, lo * inv);
+    if (seg > edgeGap)
+    {
+        const bool plus = -hi * inv >= lo * inv;
+        const std::size_t v = plus ? hiV : loV;
+        const double s = plus ? 1.0 : -1.0;
+        return {seg - radius, p.vx[v], p.vy[v], -aby * inv * s, abx * inv * s, v};
+    }
+    const bool endA = oa[edgeAxis] <= ob[edgeAxis];
+    const double ex = endA ? ax : bx;
+    const double ey = endA ? ay : by;
+    return {edgeGap - radius, ex - p.nx[edgeAxis] * edgeGap, ey - p.ny[edgeAxis] * edgeGap, p.nx[edgeAxis], p.ny[edgeAxis], edgeAxis};
+}
+
+void benchCapsuleContact(sub0bench::BenchRunner& runner)
+{
+    constexpr std::size_t Nodes = 64;
+    constexpr double Radius = 0.3;
+    constexpr double Skin = 0.008;
+    std::vector<Point2d> ring(Nodes + 1);
+    for (std::size_t i = 0; i <= Nodes; ++i)
+    {
+        const double angle = 2.0 * 3.141592653589793 * static_cast<double>(i % Nodes) / static_cast<double>(Nodes);
+        // Hub at (0.62, 0.345): the ring presses about 3 mm onto the block's left corner and top.
+        ring[i] = {0.62 + Radius * std::cos(angle), 0.345 + Radius * std::sin(angle)};
+    }
+    const std::array<std::array<double, 4>, 4> pieces{{{-3.0, 0.0, 0.6, 0.0}, {0.6, 0.04, 0.9, 0.04}, {0.9, 0.0, 5.0, 0.0},
+                                                       {0.5, 0.0, 0.6, 0.0}}};
+    std::vector<ConvexPolygon<double, 4>> polygons;
+    std::vector<SlabTwin> twins;
+    for (const auto& q : pieces)
+    {
+        const auto poly = ConvexPolygon<double, 4>::fromVertices(
+            {Point2d{q[0], -1.0}, Point2d{q[2], -1.0}, Point2d{q[2], q[3]}, Point2d{q[0], q[1]}});
+        SlabTwin t{};
+        for (std::size_t k = 0; k < 4; ++k)
+        {
+            t.vx[k] = poly.vertices[k].x;
+            t.vy[k] = poly.vertices[k].y;
+            t.nx[k] = poly.normals[k].x;
+            t.ny[k] = poly.normals[k].y;
+        }
+        polygons.push_back(poly);
+        twins.push_back(t);
+    }
+    const auto twin = [&] {
+        double sum = 0.0;
+        std::size_t indices = 0;
+        for (std::size_t i = 0; i < Nodes; ++i)
+        {
+            for (const SlabTwin& p : twins)
+            {
+                const TwinOut c = capsuleQuadTwin(p, ring[i].x, ring[i].y, ring[i + 1].x, ring[i + 1].y, Skin);
+                sum += c.gap + c.px + c.py + c.nx + c.ny;
+                indices += c.index;
+            }
+        }
+        return std::pair{sum, indices};
+    };
+    const auto library = [&] {
+        double sum = 0.0;
+        std::size_t indices = 0;
+        for (std::size_t i = 0; i < Nodes; ++i)
+        {
+            const Capsule<double, 2> edge{{ring[i], ring[i + 1]}, Skin};
+            for (const auto& p : polygons)
+            {
+                const auto c = contact(edge, p);
+                sum += c.gap + c.witness.point.x + c.witness.point.y + c.witness.normal.x + c.witness.normal.y;
+                indices += c.witness.index;
+            }
+        }
+        return std::pair{sum, indices};
+    };
+    if (twin() != library())
+    {
+        std::fprintf(stderr, "capsule contact twin disagrees with the library\n");
+        std::abort();
+    }
+    runner.run("capsule-slab contact 64x4, hand-written twin", [&] { ankerl::nanobench::doNotOptimizeAway(twin()); });
+    runner.run("capsule-slab contact 64x4, contact(Capsule, ConvexPolygon)",
+               [&] { ankerl::nanobench::doNotOptimizeAway(library()); });
 }
 
 void benchTriangleClosest(sub0bench::BenchRunner& runner)
@@ -534,6 +734,7 @@ int main(int argc, char** argv)
 
     benchSegmentDistance(runner);
     benchTriangleClosest(runner);
+    benchCapsuleContact(runner);
     benchBoxBlocks(runner);
     benchRayTriangle(runner);
     benchGrid(runner);

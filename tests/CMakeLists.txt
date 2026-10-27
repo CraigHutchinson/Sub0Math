@@ -14,6 +14,7 @@ set(SUB0MATH_STRICT_WARNINGS
 
 add_executable(Sub0Math_Tests
     test_main.cpp
+    test_contact.cpp
     test_geometry.cpp
     test_linear.cpp
     test_quantity.cpp
