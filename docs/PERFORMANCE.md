@@ -14,6 +14,23 @@ Configuring writes the scripts' location to `<build>/sub0math_tooling_dir.txt`, 
 them without knowing where CPM put Sub0Math. Benchmarks include `<bench_runner.hpp>` and accept `--filter` (case-insensitive substring), `--json`,
 `--soak <seconds>` (loop under a profiler) and `--list`.
 
+## Choosing between alternatives
+
+- **Three passes before judging.** A first implementation's number belongs to that implementation, not
+  to the mechanism. Give an alternative three optimisation passes before comparing or parking it. Break-even
+  or better: continue. Park only after three passes. Park a variant rather than reverting it, so a later
+  change in context can revive it. This is the rule in
+  [Sub0Llm's optimisation process](https://github.com/CraigHutchinson/Sub0Llm/blob/main/docs/OPTIMIZATION_PROCESS.md),
+  adopted here.
+- **Keep A/B paths open where they differ in kind,** not just in tuning. A uniform, matrix-shaped
+  formulation can do more arithmetic than a structured one, yet map better onto the hardware: SIMD lanes,
+  batching many instances (bikes, contacts), GPU-style throughput and fixed shapes. The structured form (a
+  Schur complement, a tree sweep) wins on one scalar thread. Which wins depends on the deployment, so keep
+  both behind one interface, measure each on the consumer scenario and on the batched shape it would
+  scale to, and record the choice per target rather than deleting the loser.
+- **Exception:** decide early only when the outcome is clear without further passes, for example an
+  order-of-magnitude asymptotic difference at the sizes that matter.
+
 ## Codified gates
 
 | Gate | Where | Contract |
