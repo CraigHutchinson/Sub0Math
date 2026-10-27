@@ -68,3 +68,40 @@ for (const x of specials) {
     const xb = Number.isNaN(x) ? 0x7ff8000000000000n : bitsOf(x);
     console.log(`    {${hex(xb)}, ${hex(s)}, ${hex(c)}}, // ${x}`);
 }
+
+// ---- exp and log ----
+function expInput(i) {
+    const u = splitmix64(i + 7000000);
+    const signed = Number(u >> 11n) * 2 ** -53 * 2 - 1;
+    switch (i % 4) {
+    case 0: return signed * 745;
+    case 1: return signed * 2;
+    case 2: return signed * 1e-3;
+    default: {
+        const e = 1023n - 40n + (splitmix64(i + 9000000) % 52n); // magnitudes 2^-40 .. 2^11
+        return fromBits((u & 0x800FFFFFFFFFFFFFn) | (e << 52n));
+    }
+    }
+}
+function logInput(i) {
+    const u = splitmix64(i + 11000000);
+    const unit = Number(u >> 11n) * 2 ** -53;
+    switch (i % 4) {
+    case 0: return fromBits(u & 0x7FFFFFFFFFFFFFFFn); // any non-negative pattern, including subnormals, inf, NaN
+    case 1: return unit * 100;
+    case 2: return 1 + (unit * 2 - 1) * 2 ** -18; // around 1
+    default: return unit * 2 + 0.5;
+    }
+}
+const ExpLogCount = 40000;
+let he = 0xCBF29CE484222325n;
+let hl = 0xCBF29CE484222325n;
+const canon = (v) => (Number.isNaN(v) ? 0x7ff8000000000000n : bitsOf(v));
+for (let i = 0; i < ExpLogCount; ++i) {
+    he = fnv(he, canon(Math.exp(expInput(i))));
+    hl = fnv(hl, canon(Math.log(logInput(i))));
+}
+console.log('// ExpLogCount', ExpLogCount, 'exp digest', hex(he), 'log digest', hex(hl));
+for (const x of [0, -0, 1, -1, 0.5, 2, 10, 100, 709, 709.78, 710, -745, -745.2, -746, 1e-10, 5e-324, Infinity, -Infinity, NaN]) {
+    console.log(`    {${hex(canon(x))}, ${hex(canon(Math.exp(x)))}, ${hex(canon(Math.log(x)))}}, // ${x}`);
+}

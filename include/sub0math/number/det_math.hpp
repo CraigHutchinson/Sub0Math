@@ -1,13 +1,14 @@
 #pragma once
 
 /*
- * Deterministic sine and cosine.
+ * Deterministic sine, cosine, exp, log and pow.
  *
  * The algorithms are Sun Microsystems' fdlibm (as in FreeBSD msun and V8's src/base/ieee754.cc):
- * __kernel_sin, __kernel_cos, __ieee754_rem_pio2 and __kernel_rem_pio2 (Payne-Hanek for large arguments).
+ * __kernel_sin, __kernel_cos, __ieee754_rem_pio2 and __kernel_rem_pio2 (Payne-Hanek for large arguments),
+ * __ieee754_exp and __ieee754_log.
  * Using only +, -, * and exact scaling, they give the same bits on every IEEE-754 binary64 platform when
  * the compiler does not fuse multiply-add (build with -ffp-contract=off; see sub0math_target_deterministic_fp),
- * and the same bits as JavaScript's Math.sin and Math.cos in V8.
+ * and the same bits as JavaScript's Math.sin, Math.cos, Math.exp and Math.log in V8. pow is our own.
  *
  * Original fdlibm notice, preserved as its terms require:
  *
@@ -28,6 +29,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include "sub0math/number/real.hpp"
 
@@ -610,6 +612,253 @@ struct SinCos
     }
     const detail::Reduced r = detail::remPio2(x);
     return {detail::sinFromReduction(r), detail::cosFromReduction(r)};
+}
+
+/**
+ * Computes e^x, bit-identically on every platform (fdlibm; equals V8 Math.exp).
+ *
+ * Accurate to under 1 ulp. Overflows to +infinity above 709.78 and underflows to zero below -745.13; NaN stays NaN.
+ *
+ * @param x The exponent.
+ * @return e^x.
+ */
+[[nodiscard]] constexpr double exp(double x) noexcept
+{
+    constexpr double one = 1.0;
+    constexpr double huge = 1.0e+300;
+    constexpr double twom1000 = 9.33263618503218878990e-302; // 2^-1000
+    constexpr double oThreshold = 7.09782712893383973096e+02;
+    constexpr double uThreshold = -7.45133219101941108420e+02;
+    constexpr double invln2 = 1.44269504088896338700e+00;
+    constexpr double P1 = 1.66666666666666019037e-01;
+    constexpr double P2 = -2.77777777770155933842e-03;
+    constexpr double P3 = 6.61375632143793436117e-05;
+    constexpr double P4 = -1.65339022054652515390e-06;
+    constexpr double P5 = 4.13813679705723846039e-08;
+    constexpr double ln2HI[2] = {6.93147180369123816490e-01, -6.93147180369123816490e-01};
+    constexpr double ln2LO[2] = {1.90821492927058770002e-10, -1.90821492927058770002e-10};
+    constexpr double halF[2] = {0.5, -0.5};
+
+    const std::uint64_t bits = std::bit_cast<std::uint64_t>(x);
+    std::int32_t hx = static_cast<std::int32_t>(bits >> 32);
+    const std::uint32_t lx = static_cast<std::uint32_t>(bits);
+    const int xsb = (hx >> 31) & 1; // sign bit of x
+    hx &= 0x7fffffff;               // high word of |x|
+
+    if (hx >= 0x40862E42) // |x| >= 709.78
+    {
+        if (hx >= 0x7ff00000)
+        {
+            if (((hx & 0xfffff) | static_cast<std::int32_t>(lx)) != 0)
+            {
+                return x + x; // NaN
+            }
+            return xsb == 0 ? x : 0.0; // exp(+-inf) = {inf, 0}
+        }
+        if (x > oThreshold)
+        {
+            return huge * huge; // overflow
+        }
+        if (x < uThreshold)
+        {
+            return twom1000 * twom1000; // underflow
+        }
+    }
+
+    double hi = 0.0;
+    double lo = 0.0;
+    int k = 0;
+    if (hx > 0x3fd62e42) // |x| > 0.5 ln2
+    {
+        if (hx < 0x3FF0A2B2) // and |x| < 1.5 ln2
+        {
+            if (x == 1.0)
+            {
+                return 2.718281828459045; // V8 special-cases e: the algorithm gets the last bit of exp(1) wrong
+            }
+            hi = x - ln2HI[xsb];
+            lo = ln2LO[xsb];
+            k = 1 - xsb - xsb;
+        }
+        else
+        {
+            k = static_cast<int>(invln2 * x + halF[xsb]);
+            const double t = static_cast<double>(k);
+            hi = x - t * ln2HI[0]; // t * ln2HI is exact here
+            lo = t * ln2LO[0];
+        }
+        x = hi - lo;
+    }
+    else if (hx < 0x3e300000) // |x| < 2^-28
+    {
+        if (huge + x > one)
+        {
+            return one + x; // trigger inexact
+        }
+    }
+
+    // x is now in the primary range.
+    const double t = x * x;
+    const double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+    if (k == 0)
+    {
+        return one - ((x * c) / (c - 2.0) - x);
+    }
+    const double y = one - ((lo - (x * c) / (2.0 - c)) - hi);
+    if (k >= -1021)
+    {
+        if (k == 1024)
+        {
+            return y * 2.0 * 8.98846567431158e307;
+        }
+        return y * detail::fromHighWord(0x3ff00000 + (k << 20));
+    }
+    return y * detail::fromHighWord(0x3ff00000 + ((k + 1000) << 20)) * twom1000;
+}
+
+/**
+ * Computes the natural logarithm, bit-identically on every platform (fdlibm; equals V8 Math.log).
+ *
+ * Accurate to under 1 ulp. log(0) is -infinity, negative arguments give NaN, +infinity and NaN pass through.
+ *
+ * @param x The argument.
+ * @return ln(x).
+ */
+[[nodiscard]] constexpr double log(double x) noexcept
+{
+    constexpr double ln2Hi = 6.93147180369123816490e-01;
+    constexpr double ln2Lo = 1.90821492927058770002e-10;
+    constexpr double two54 = 1.80143985094819840000e+16;
+    constexpr double Lg1 = 6.666666666666735130e-01;
+    constexpr double Lg2 = 3.999999999940941908e-01;
+    constexpr double Lg3 = 2.857142874366239149e-01;
+    constexpr double Lg4 = 2.222219843214978396e-01;
+    constexpr double Lg5 = 1.818357216161805012e-01;
+    constexpr double Lg6 = 1.531383769920937332e-01;
+    constexpr double Lg7 = 1.479819860511658591e-01;
+
+    std::int32_t hx = detail::highWord(x);
+    std::uint32_t lx = static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(x));
+
+    int k = 0;
+    if (hx < 0x00100000) // x < 2^-1022
+    {
+        if (((hx & 0x7fffffff) | static_cast<std::int32_t>(lx)) == 0)
+        {
+            return -std::numeric_limits<double>::infinity(); // log(+-0) = -inf
+        }
+        if (hx < 0)
+        {
+            return std::numeric_limits<double>::quiet_NaN(); // log(-#) = NaN
+        }
+        k -= 54;
+        x *= two54; // subnormal number, scale up x
+        hx = detail::highWord(x);
+        lx = static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(x));
+    }
+    if (hx >= 0x7ff00000)
+    {
+        return x + x;
+    }
+    k += (hx >> 20) - 1023;
+    hx &= 0x000fffff;
+    std::int32_t i = (hx + 0x95f64) & 0x100000;
+    x = detail::fromWords(hx | (i ^ 0x3ff00000), lx); // normalise x or x/2
+    k += (i >> 20);
+    const double f = x - 1.0;
+    if ((0x000fffff & (2 + hx)) < 3) // -2^-20 <= f < 2^-20
+    {
+        if (f == 0.0)
+        {
+            if (k == 0)
+            {
+                return 0.0;
+            }
+            const double dk = static_cast<double>(k);
+            return dk * ln2Hi + dk * ln2Lo;
+        }
+        const double R = f * f * (0.5 - 0.33333333333333333 * f);
+        if (k == 0)
+        {
+            return f - R;
+        }
+        const double dk = static_cast<double>(k);
+        return dk * ln2Hi - ((R - dk * ln2Lo) - f);
+    }
+    const double s = f / (2.0 + f);
+    const double dk = static_cast<double>(k);
+    const double z = s * s;
+    i = hx - 0x6147a;
+    const double w = z * z;
+    const std::int32_t j = 0x6b851 - hx;
+    const double t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+    const double t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+    i |= j;
+    const double R = t2 + t1;
+    if (i > 0)
+    {
+        const double hfsq = 0.5 * f * f;
+        if (k == 0)
+        {
+            return f - (hfsq - s * (hfsq + R));
+        }
+        return dk * ln2Hi - ((hfsq - (s * (hfsq + R) + dk * ln2Lo)) - f);
+    }
+    if (k == 0)
+    {
+        return f - s * (f - R);
+    }
+    return dk * ln2Hi - ((s * (f - R) - dk * ln2Lo) - f);
+}
+
+/**
+ * Computes x^y deterministically (our own definition, not fdlibm's pow, so not equal to V8's Math.pow).
+ *
+ * A whole-number y of magnitude up to 1024 uses repeated squaring: exact for x^2, a few ulp for larger powers.
+ * Any other y with x > 0 uses exp(y log x), whose relative error is about |y log x| ulp; it is meant for step-size
+ * and impedance exponents, not for ulp-accurate mathematics. Fractional y with x < 0 gives NaN; x = 0 gives 0 for
+ * y > 0 and +infinity for y < 0; pow(x, 0) is 1 for every x.
+ *
+ * @param x The base.
+ * @param y The exponent.
+ * @return x^y.
+ */
+[[nodiscard]] constexpr double pow(double x, double y) noexcept
+{
+    if (y == 0.0)
+    {
+        return 1.0;
+    }
+    if (x != x || y != y)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double magnitude = y < 0.0 ? -y : y;
+    if (magnitude <= 1024.0 && static_cast<double>(static_cast<std::int32_t>(magnitude)) == magnitude)
+    {
+        auto n = static_cast<std::uint32_t>(magnitude);
+        double result = 1.0;
+        double base = x;
+        while (n != 0)
+        {
+            if ((n & 1U) != 0)
+            {
+                result *= base;
+            }
+            base *= base;
+            n >>= 1U;
+        }
+        return y < 0.0 ? 1.0 / result : result;
+    }
+    if (x == 0.0)
+    {
+        return y > 0.0 ? 0.0 : std::numeric_limits<double>::infinity();
+    }
+    if (x < 0.0)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return exp(y * log(x));
 }
 
 /**

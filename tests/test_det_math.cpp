@@ -229,3 +229,126 @@ TEST_CASE("det float overloads and the Angle helpers use the deterministic funct
     CHECK(bitsOf(both.sin) == bitsOf(det::sin(100.0)));
     CHECK(bitsOf(both.cos) == bitsOf(det::cos(100.0)));
 }
+
+// ---- exp, log, pow ----
+
+namespace
+{
+
+double expInput(std::uint64_t i)
+{
+    const std::uint64_t u = splitmix64(i + 7000000);
+    const double signedUnit = static_cast<double>(u >> 11) * 0x1p-53 * 2 - 1;
+    switch (i % 4)
+    {
+    case 0:
+        return signedUnit * 745;
+    case 1:
+        return signedUnit * 2;
+    case 2:
+        return signedUnit * 1e-3;
+    default:
+    {
+        const std::uint64_t e = 1023 - 40 + splitmix64(i + 9000000) % 52;
+        return std::bit_cast<double>((u & 0x800FFFFFFFFFFFFFULL) | (e << 52));
+    }
+    }
+}
+
+double logInput(std::uint64_t i)
+{
+    const std::uint64_t u = splitmix64(i + 11000000);
+    const double unit = static_cast<double>(u >> 11) * 0x1p-53;
+    switch (i % 4)
+    {
+    case 0:
+        return std::bit_cast<double>(u & 0x7FFFFFFFFFFFFFFFULL);
+    case 1:
+        return unit * 100;
+    case 2:
+        return 1 + (unit * 2 - 1) * 0x1p-18;
+    default:
+        return unit * 2 + 0.5;
+    }
+}
+
+std::uint64_t canonical(double v)
+{
+    return std::isnan(v) ? 0x7ff8000000000000ULL : bitsOf(v);
+}
+
+constexpr std::uint64_t ExpLogCount = 40000;
+constexpr std::uint64_t V8ExpDigest = 0x8a4511426ccf76c1ULL;
+constexpr std::uint64_t V8LogDigest = 0x52d33eaff88f3165ULL;
+
+// Node 24 Math.exp and Math.log: {x, exp(x), log(x)}.
+constexpr Expected V8ExpLog[] = {
+    {0x0000000000000000, 0x3ff0000000000000, 0xfff0000000000000},
+    {0x8000000000000000, 0x3ff0000000000000, 0xfff0000000000000},
+    {0x3ff0000000000000, 0x4005bf0a8b145769, 0x0000000000000000},
+    {0xbff0000000000000, 0x3fd78b56362cef38, 0x7ff8000000000000},
+    {0x3fe0000000000000, 0x3ffa61298e1e069c, 0xbfe62e42fefa39ef},
+    {0x4000000000000000, 0x401d8e64b8d4ddae, 0x3fe62e42fefa39ef},
+    {0x4024000000000000, 0x40d5829dcf950560, 0x40026bb1bbb55516},
+    {0x4059000000000000, 0x48f3494a9b171bf5, 0x40126bb1bbb55516},
+    {0x4086280000000000, 0x7fdd422d2be5dc9b, 0x401a416357d87f55},
+    {0x40862e3d70a3d70a, 0x7fefe9ce5c4c52b4, 0x401a4283947ad848},
+    {0x4086300000000000, 0x7ff0000000000000, 0x401a42d4d1ff8154},
+    {0xc087480000000000, 0x0000000000000001, 0x7ff8000000000000},
+    {0xc08749999999999a, 0x0000000000000000, 0x7ff8000000000000},
+    {0xc087500000000000, 0x0000000000000000, 0x7ff8000000000000},
+    {0x3ddb7cdfd9d7bdbb, 0x3ff000000006df38, 0xc037069e2aa2aa5b},
+    {0x0000000000000001, 0x3ff0000000000000, 0xc0874385446d71c3},
+    {0x7ff0000000000000, 0x7ff0000000000000, 0x7ff0000000000000},
+    {0xfff0000000000000, 0x0000000000000000, 0x7ff8000000000000},
+    {0x7ff8000000000000, 0x7ff8000000000000, 0x7ff8000000000000},
+};
+
+} // namespace
+
+static_assert(bitsOf(det::exp(1.0)) == 0x4005bf0a8b145769ULL);
+static_assert(bitsOf(det::log(2.0)) == 0x3fe62e42fefa39efULL);
+static_assert(det::pow(3.0, 2.0) == 9.0);
+
+TEST_CASE("det exp/log equal V8 on pinned values and over 40000 generated inputs each")
+{
+    for (const Expected& e : V8ExpLog)
+    {
+        const double x = std::bit_cast<double>(e.x);
+        CAPTURE(x);
+        CHECK(canonical(det::exp(x)) == e.sin);
+        CHECK(canonical(det::log(x)) == e.cos);
+    }
+    std::uint64_t he = 0xCBF29CE484222325ULL;
+    std::uint64_t hl = 0xCBF29CE484222325ULL;
+    for (std::uint64_t i = 0; i < ExpLogCount; ++i)
+    {
+        he = fnv(he, canonical(det::exp(expInput(i))));
+        hl = fnv(hl, canonical(det::log(logInput(i))));
+    }
+    CHECK(he == V8ExpDigest);
+    CHECK(hl == V8LogDigest);
+}
+
+TEST_CASE("det pow: exact for whole exponents, close to the C library otherwise")
+{
+    CHECK(det::pow(2.0, 10.0) == 1024.0);
+    CHECK(det::pow(7.0, 0.0) == 1.0);
+    CHECK(det::pow(0.5, 2.0) == 0.25);
+    CHECK(det::pow(2.0, -3.0) == 0.125);
+    CHECK(det::pow(-2.0, 3.0) == -8.0);
+    CHECK(det::pow(0.0, 2.5) == 0.0);
+    CHECK(std::isinf(det::pow(0.0, -2.5)));
+    CHECK(std::isnan(det::pow(-2.0, 0.5)));
+    CHECK(std::isnan(det::pow(std::numeric_limits<double>::quiet_NaN(), 2.0)));
+    double worst = 0;
+    for (std::uint64_t i = 0; i < 4000; ++i)
+    {
+        const double x = 0.001 + 100.0 * static_cast<double>(splitmix64(i) >> 11) * 0x1p-53;
+        const double y = -3.0 + 6.0 * static_cast<double>(splitmix64(i + 5) >> 11) * 0x1p-53;
+        const double reference = static_cast<double>(std::pow(static_cast<long double>(x), static_cast<long double>(y)));
+        worst = std::max(worst, std::fabs(det::pow(x, y) - reference) / std::fabs(reference));
+    }
+    MESSAGE("pow worst relative error vs long double: ", worst);
+    CHECK(worst < 5e-15);
+}

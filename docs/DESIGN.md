@@ -55,10 +55,12 @@ matched on every Windows build and differed on Linux and macOS, with libm `sin`/
   arguments), the code behind V8's `Math.sin`/`Math.cos`. Results are bit-identical to V8, which gives
   JavaScript parity for ports. Under 0.8 ulp worst case over 60,000 inputs of every magnitude. The fdlibm
   notice is preserved in the header and in `NOTICE.md`; its terms are compatible with the MIT licence.
-- **Provided:** `det::sin`, `det::cos`, `det::sincos` (one shared reduction), double and float (float is
-  the double result rounded, so it is deterministic too), `constexpr` and `noexcept`; any finite input,
-  NaN for infinities and NaN. Not yet provided: `tan`, `atan2`, `exp`, `log`, `pow`; a call site that needs one
-  on state adds it here (fdlibm again), not a libm call.
+- **Provided:** `det::sin`, `det::cos`, `det::sincos` (one shared reduction), `det::exp`, `det::log` (all
+  bit-identical to V8), double and float for the trigonometric ones (float is the double result rounded, so it is
+  deterministic too), `constexpr` and `noexcept`; any finite input, NaN for infinities and NaN as IEEE says.
+  `det::pow` is our own: exact repeated squaring for whole exponents up to 1024 (so `x^2` is `x * x`), else
+  `exp(y log x)`, about `|y log x|` ulp. Not yet provided: `tan`, `atan2`, `asin`/`acos`, `sinh`/`cosh`; a call
+  site that needs one on state adds it here, not a libm call.
 - **Units:** the `Angle`-typed `sin`, `cos` and the new `sincos` call `det::`; `tan` still calls the C library
   and is documented as unfit for state. `sqrt` stays `std::sqrt` (exactly rounded by IEEE).
 - **Contract:** only `+ - *` and exact scaling are used, so the bits depend on the compiler not fusing

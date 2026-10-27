@@ -374,7 +374,7 @@ repository moves its timings: re-record the baselines deliberately, with the rea
 
 Library calls are the other source of platform differences: `std::sin`, `std::cos`, `std::exp`, `std::pow` and
 friends are not specified to the last bit, and differ between MinGW, glibc and libSystem even with identical
-flags. State paths call `sub0math::det::sin/cos/sincos` (fdlibm, equal to V8's `Math.sin/cos`) instead; see
+flags. State paths call `sub0math::det::sin/cos/sincos` (fdlibm, equal to V8 `Math.sin/cos`), `det::exp`, `det::log`, `det::pow` instead; see
 DESIGN.md, "Deterministic transcendentals". Cost measured against the C library on the development host (GCC 16
 -O3, MinGW-w64 UCRT, 1024 values per op, pair `sin+cos x1024`): `det::sin` plus `det::cos` at 0.89x of
 `std::sin` plus `std::cos` for |x| <= 4, 1.15x for |x| <= 1000 and 1.37x for |x| <= 1e6 (huge arguments take
