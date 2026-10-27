@@ -52,9 +52,8 @@ accepted. Accepting is explicit: `accept` moves the named benchmarks' baseline t
 and appends an entry (date, commit, reason, before and after) to the baseline's `accepted` log; commit
 that file with the change. `git push --no-verify` bypasses the hook, as with any git hook.
 
-Levels and the time budget. `gate` and `auto` run at the `quick` level by default: every pair group (library
-benchmark plus hand-written reference, also the controls) for 3 rounds, and as many of the other benchmarks,
-stalest first, as fit --budget (default 90 s, SUB0MATH_PERF_BUDGET, or the configured quick budget). A regression
+Levels and the time budget. `gate` and `auto` run at the `quick` level by default: 2 controls (hand-written references) always, plus as
+many whole groups (a pair group, or a standalone benchmark), stalest first, as fit --budget (default 90 s, SUB0MATH_PERF_BUDGET, or the configured quick budget). A regression
 is still confirmed in full even if that overruns the budget; inconclusive and unmeasured benchmarks never block.
 `--level full` (or SUB0MATH_PERF_LEVEL=full, or pushing a tag matching `v*` / `milestone/*`, configurable with
 install-hooks --full-refs) measures everything with the full method and no budget. The level and why are the first

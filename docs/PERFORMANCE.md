@@ -99,9 +99,9 @@ full is the complete method, unchanged.
 | | `quick` (default) | `full` |
 |---|---|---|
 | Used by | pre-push gate, after-build check | milestone pushes, or on request |
-| Benchmarks | every pair group (library benchmark plus its hand-written reference) and the environment controls, always; the others rotate | all |
+| Benchmarks | 2 environment controls (hand-written references) always; whole groups (a pair group, or a standalone benchmark) rotate, stalest first, to fill the budget | all |
 | Rounds | 3, the least that gives a median and a spread | the gate's default (3), plus extra rounds wherever the rules below ask for them |
-| Time | a budget, **90 s** by default | none, unless one is given |
+| Time | a budget, **90 s** by default (a target: confirming a regression may overrun it) | none, unless one is given |
 | Bimodal-known benchmarks | measured to 10 samples only when a verdict depends on it (a regression to confirm, an inconclusive result to retry) | measured to 10 samples from the start |
 | Confirmation of a regression | always, even if it overruns the budget (the overrun is reported) | always |
 | Inconclusive retry | only if it fits the remaining budget | always |
@@ -130,22 +130,32 @@ measuring time: the build before it does not count.
 
 **The planner** (`sub0perf/plan.py`) spends it like this:
 
+- The unit of rotation is a **group**: a pair group (a library benchmark with its hand-written twin, measured
+  back to back in the same rounds) or a standalone benchmark. A pair ratio is a self-contained relative check,
+  so a pair group is valid whenever it is selected and need not run every push.
 - Cost per sample comes from the timings of the last runs (`.git/sub0perf/coverage/<target>.json`: the
   median wall time of each benchmark's process, which includes process start-up, and of a round's two
-  steady calibrations). With none yet, one calibration and one benchmark are timed as a cheap probe, and
-  that time stands in for every benchmark.
-- The always-measured set (every member of a group that has a hand-written reference, which also are the
-  controls) runs for 3 rounds. If that alone is estimated over the budget, it is measured anyway and the
-  overrun is stated; it is the minimum at which a verdict on a pair means something.
-- 25% of the budget is kept for confirmation and retry passes. The rest is filled with the other
-  benchmarks, **stalest first**: never measured, then longest since last measured (counted in gate runs);
-  ties are broken by a hash of the commit and the benchmark name, so a commit's choice is repeatable and
-  differs between commits. A benchmark too expensive for the space left is skipped and stays stalest.
-- After the plan is made the gate prints what it will do and the coverage it gives, for example
-  `plan: 18/30 benchmarks x 3 rounds, estimated 52 s of a 90 s budget`, `coverage: measured 18/30 now; all
-  covered within 2 push(es)`, `stalest after this push: <name> (never measured)`. When the rotating
-  benchmarks never fit (budget below the cost of one of them), it says so and suggests a larger budget or
-  the full level.
+  steady calibrations). With none yet, one calibration and one benchmark are timed as a cheap probe; a cold
+  single sample under-estimates, so the first plan on a machine is optimistic and the next is accurate.
+- **Always measured: 2 controls**, the cheapest hand-written references that the baseline does not know to be
+  bimodal (the same exclusion the judge applies). Two is the least that lets one disagree with the other,
+  and absolute verdicts need the environment correction they give. They run for 3 rounds, the least that
+  gives a median and a spread.
+- **Re-check first:** groups whose last result was a regression (confirmed or not) or inconclusive are
+  stored (`recheck`) and go next, but together they may take at most half of the spendable budget. A group
+  measured later without being flagged is cleared.
+- 25% of the budget is kept for confirmation and retry passes. The rest is filled with whole groups,
+  **stalest first**: never measured, then longest since last measured (counted in gate runs; a group's age is
+  its stalest member's); ties are broken by a hash of the commit and the group, so the choice for a
+  commit is repeatable and differs between commits. A group too expensive for the space left is skipped
+  and stays stalest, and cheaper ones fill the rest.
+- If the stalest group alone does not fit beside the controls, it is **measured alone** (otherwise cheaper
+  groups would keep it waiting for ever) and the overrun is stated.
+- The gate prints what it will do and the coverage it gives, for example `plan: 14/30 benchmarks x 3
+  rounds, estimated 66 s of a 90 s budget`, `controls, always: 2 hand-written reference(s) (...); groups this
+  push: 6 of 22`, `coverage: measured 14/30 now; every group is covered within 4 push(es)`, `stalest after
+  this push: <group> (never measured)`. The cycle length is a replay of the following pushes from the measured
+  costs (without re-checks), so it is exact for steady costs.
 - After the run it prints the measured time against the budget, and the overrun when there is one.
   `.git/sub0perf/log.jsonl` has the level, benchmarks measured and seconds of every gate.
 
