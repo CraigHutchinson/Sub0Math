@@ -100,7 +100,7 @@ def gate_command(args):
         return 1
 
 
-def choose_benchmarks(args, exe, target, state, head, all_names):
+def choose_benchmarks(args, exe, target, state, head, all_names, baseline=None):
     """(benchmarks to measure, rounds) for this level: everything at full, a plan that fits the time budget at quick."""
     rounds = args.rounds
     if args.level != levels.QUICK:
@@ -110,11 +110,13 @@ def choose_benchmarks(args, exe, target, state, head, all_names):
         return all_names, rounds
     per_sample = None
     if not state["costs"] and all_names:  # nothing timed yet: a cheap probe of one sample and one calibration
-        per_sample, overhead = probe_cost(exe, (planning.mandatory_names(all_names) or all_names)[0], args)
+        per_sample, overhead = probe_cost(exe, (planning.choose_controls(all_names, {}, (), 1) or all_names)[0], args)
         state["round_overhead"] = overhead
         print(f"sub0perf: no timings of {target} yet; probe: {per_sample:.1f} s per sample, {overhead:.1f} s of calibration per round")
     rounds = max(rounds, planning.QUICK_ROUNDS)
-    plan = planning.plan_quick(all_names, state, head, args.budget_seconds, rounds, default_cost=per_sample)
+    known = read_json(baseline).get("benchmarks", {}) if baseline and Path(baseline).is_file() else {}
+    bimodal = [n for n, b in known.items() if isinstance(b, dict) and b.get("modes")]
+    plan = planning.plan_quick(all_names, state, head, args.budget_seconds, rounds, default_cost=per_sample, avoid=bimodal)
     for line in planning.describe_plan(plan, len(all_names), state, head):
         print(line)
     return plan.selected, rounds
@@ -138,7 +140,7 @@ def run_gate(args, repo, d, config_path, head, clean):
         state = planning.load_state(d, target)
         timings = planning.new_timings()
         all_names = list_names(exe, "")
-        chosen, rounds = choose_benchmarks(args, exe, target, state, head, all_names)
+        chosen, rounds = choose_benchmarks(args, exe, target, state, head, all_names, t["baseline"])
         args.subset = len(chosen) < len(all_names)
         budget = planning.Budget(args.budget_seconds)  # measuring time; the build above does not count
         samples, meta, positions, counters = measure_all(exe, args, names=chosen, rounds=rounds, timings=timings)
@@ -176,10 +178,11 @@ def run_gate(args, repo, d, config_path, head, clean):
         # is re-measured, and only what persists counts.
         retried, _ = retry_inconclusive(both, rerun, args.rounds, more_for, affordable if quick and args.budget_seconds else None)
         # A regression is always confirmed before it blocks, even if that overruns a quick budget.
-        confirm_regressions(both, rerun, args.confirm_rounds, more_for)
+        first_regressed, _ = confirm_regressions(both, rerun, args.confirm_rounds, more_for)
         inconclusive = sorted(inconclusive_in(both())[0])
         measured_s = budget.elapsed()
         planning.absorb_timings(state, timings)
+        planning.update_recheck(state, planning.units_of(all_names), chosen, set(first_regressed) | set(inconclusive))
         planning.mark_measured(state, chosen, head)
         planning.save_state(d, target, state)
         print(f"\nsub0perf: measured {len(chosen)}/{len(all_names)} benchmarks at the {args.level} level in {measured_s:.0f} s"

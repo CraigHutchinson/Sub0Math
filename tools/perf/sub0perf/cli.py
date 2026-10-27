@@ -129,7 +129,8 @@ def measure_and_judge(args):
     if args.filter:  # the user chose the benchmarks
         names, rounds = None, args.rounds
     else:
-        names, rounds = choose_benchmarks(args, args.exe, args.target or Path(args.exe).stem, state, head, list_names(args.exe, ""))
+        names, rounds = choose_benchmarks(args, args.exe, args.target or Path(args.exe).stem, state, head, list_names(args.exe, ""),
+                                      args.baseline)
         args.subset = len(names) < len(list_names(args.exe, ""))
     budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)
     samples, meta, positions, counters = measure_all(args.exe, args, names=names, rounds=rounds, timings=timings)

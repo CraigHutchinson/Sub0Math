@@ -8,69 +8,126 @@ from .. import confirm, judge, plan
 from ..baseline import baseline_data
 from .helpers import record
 
-# Four pair-group members (a library benchmark and its hand-written reference, twice), the rest unpaired.
-PAIRS = ["dot, Length", "dot, hand-written", "seg, Length", "seg, hand-written"]
-LOOSE = [f"Loose {i:02d}" for i in range(20)]
+# Five pair groups (a library benchmark and its hand-written reference), then standalone benchmarks.
+PAIRS = [n for i in range(5) for n in (f"p{i}, Length", f"p{i}, hand-written")]
+LOOSE = [f"Loose {i:02d}" for i in range(10)]
 ALL = PAIRS + LOOSE
 
 
-def state_with(cost=1.0, overhead=2.0, measured=None, pushes=0):
-    return {"pushes": pushes, "costs": {n: cost for n in ALL}, "round_overhead": overhead, "benchmarks": measured or {}}
+def state_with(cost=1.0, overhead=2.0, measured=None, pushes=0, recheck=()):
+    return {"pushes": pushes, "costs": {n: cost for n in ALL}, "round_overhead": overhead, "benchmarks": measured or {},
+            "recheck": list(recheck)}
 
 
-class MandatoryTest(unittest.TestCase):
-    def test_pair_groups_and_controls_only(self):
-        self.assertEqual(plan.mandatory_names(ALL), sorted(PAIRS))
+class UnitsTest(unittest.TestCase):
+    def test_pair_groups_are_units_and_the_rest_stand_alone(self):
+        units = plan.units_of(ALL)
+        self.assertEqual(len(units), 5 + 10)
+        self.assertEqual(sorted(units["p0"]), ["p0, Length", "p0, hand-written"])
+        self.assertEqual(units["Loose 03"], ["Loose 03"])
 
-    def test_a_group_without_reference_is_not_mandatory(self):
-        self.assertEqual(plan.mandatory_names(["a, x", "a, y", "b, hand-written", "b, z"]), ["b, hand-written", "b, z"])
+    def test_a_group_without_reference_is_not_one_unit(self):
+        self.assertEqual(sorted(plan.units_of(["a, x", "a, y", "b, hand-written", "b, z"])), ["a, x", "a, y", "b"])
+
+    def test_controls_are_the_cheapest_references_and_avoid_bimodal(self):
+        costs = {n: 1.0 for n in ALL}
+        costs["p3, hand-written"] = 0.1
+        costs["p1, hand-written"] = 0.2
+        self.assertEqual(plan.choose_controls(ALL, costs), ["p3, hand-written", "p1, hand-written"])
+        self.assertNotIn("p3, hand-written", plan.choose_controls(ALL, costs, avoid=["p3, hand-written"]))
+        self.assertEqual(plan.choose_controls(ALL, costs, avoid=["p3, hand-written"])[0], "p1, hand-written")
 
 
 class PlanFitTest(unittest.TestCase):
     def test_fits_the_budget_and_keeps_the_reserve(self):
         p = plan.plan_quick(ALL, state_with(), "c1", 60.0)
-        # 3 rounds x (2 s + 4 pair members x 1 s) = 18 s; the usable 45 s leaves 27 s = 9 loose benchmarks at 3 s each
-        self.assertEqual(len(p.rotating), 9)
         self.assertLessEqual(p.estimate, 60.0 * (1 - plan.RESERVE))
         self.assertEqual(p.rounds, 3)
-        self.assertEqual(len(p.mandatory) + len(p.rotating) + len(p.skipped), len(ALL))
+        self.assertEqual(p.overrun, 0.0)
+        self.assertTrue(p.rotating)
+        self.assertEqual(len(p.rechecks) + len(p.rotating) + len(p.skipped), len(p.units))
 
-    def test_pairs_and_controls_always_included_however_small_the_budget(self):
-        for budget in (1000.0, 30.0, 5.0, 1.0):
-            p = plan.plan_quick(ALL, state_with(), "c1", budget)
-            self.assertTrue(set(PAIRS) <= set(p.selected), budget)
-            self.assertEqual(p.rounds, plan.QUICK_ROUNDS, budget)
+    def test_only_the_controls_are_always_measured_not_every_pair(self):
+        p = plan.plan_quick(ALL, state_with(), "c1", 20.0)  # 3 x (2 + 2 controls) = 12 s; 15 s usable
+        self.assertEqual(len(p.controls), plan.CONTROLS)
+        self.assertTrue(set(p.controls) <= set(p.selected))
+        self.assertLess(len([n for n in p.selected if n in PAIRS]), len(PAIRS))
 
-    def test_overrun_is_reported_when_even_the_minimum_does_not_fit(self):
-        p = plan.plan_quick(ALL, state_with(), "c1", 10.0)  # the pairs need 18 s
-        self.assertEqual(p.rotating, [])
-        self.assertAlmostEqual(p.overrun, 8.0)
-        self.assertTrue(any("over the 10 s budget by 8 s" in note for note in p.notes))
+    def test_a_pair_group_is_measured_whole_unless_only_its_control_is(self):
+        for k in range(8):
+            p = plan.plan_quick(ALL, state_with(), f"c{k}", 45.0)
+            for i in range(5):
+                both = {f"p{i}, Length", f"p{i}, hand-written"}
+                allowed = (0, 1, 2) if f"p{i}, hand-written" in p.controls else (0, 2)
+                self.assertIn(len(both & set(p.selected)), allowed)
+                if f"p{i}, Length" in p.selected:
+                    self.assertIn(f"p{i}, hand-written", p.selected)
 
     def test_a_big_budget_measures_everything(self):
         p = plan.plan_quick(ALL, state_with(), "c1", 10000.0)
         self.assertEqual(sorted(p.selected), sorted(ALL))
         self.assertEqual(p.skipped, [])
+        self.assertEqual(p.pushes_to_cover, 1)
 
-    def test_expensive_benchmarks_are_skipped_but_cheaper_ones_still_fit(self):
+    def test_one_group_over_the_budget_is_measured_alone_with_the_overrun_reported(self):
+        state = state_with()
+        for n in ("p0, Length", "p0, hand-written"):
+            state["costs"][n] = 100.0
+        state["benchmarks"] = {n: {"push": 5} for n in ALL if not n.startswith("p0")}  # p0 is the stalest
+        p = plan.plan_quick(ALL, state, "c1", 30.0)
+        self.assertEqual(p.rotating, ["p0"])
+        self.assertIn("p0, Length", p.selected)
+        self.assertGreater(p.overrun, 0)
+        self.assertTrue(any("over the 30 s budget" in note for note in p.notes))
+
+    def test_expensive_groups_are_skipped_but_cheaper_ones_still_fit(self):
         state = state_with()
         state["costs"]["Loose 00"] = 500.0
         p = plan.plan_quick(ALL, state, "c1", 60.0)
         self.assertNotIn("Loose 00", p.selected)
-        self.assertGreater(len(p.rotating), 5)
+        self.assertGreater(len(p.rotating), 3)
 
     def test_unknown_costs_use_the_probe_default(self):
-        state = {"pushes": 0, "costs": {}, "benchmarks": {}, "round_overhead": 2.0}
-        p = plan.plan_quick(ALL, state, "c1", 60.0, default_cost=2.0)  # 3 x (2 + 8) = 30 s; 15 s left = 2 at 6 s
-        self.assertEqual(len(p.rotating), 2)
+        state = {"pushes": 0, "costs": {}, "benchmarks": {}, "round_overhead": 2.0, "recheck": []}
+        p = plan.plan_quick(ALL, state, "c1", 60.0, default_cost=2.0)  # controls 3 x (2 + 4) = 18 s of 45 s usable
+        self.assertTrue(p.rotating)
+        self.assertLessEqual(p.estimate, 45.0)
 
     def test_describe_reports_counts_and_coverage(self):
         state = state_with()
         p = plan.plan_quick(ALL, state, "c1", 60.0)
         text = "\n".join(plan.describe_plan(p, len(ALL), state, "c1"))
         self.assertIn(f"{len(p.selected)}/{len(ALL)}", text)
-        self.assertIn("all covered within 3 push(es)", text)  # 20 loose, 9 per push
+        self.assertIn(f"covered within {p.pushes_to_cover} push(es)", text)
+        self.assertIn("controls, always", text)
         self.assertIn("stalest", text)
+
+
+class RecheckTest(unittest.TestCase):
+    def test_groups_awaiting_a_recheck_go_first(self):
+        state = state_with(recheck=["p4", "Loose 07"])
+        fresh = ("p4, Length", "p4, hand-written", "Loose 07")  # measured last push, so otherwise last in line
+        state["benchmarks"] = {n: {"push": 9 if n in fresh else 1} for n in ALL}
+        p = plan.plan_quick(ALL, state, "c1", 60.0)
+        self.assertEqual(sorted(p.rechecks), ["Loose 07", "p4"])
+
+    def test_rechecks_cannot_take_more_than_their_share(self):
+        state = state_with(recheck=[f"p{i}" for i in range(5)])
+        p = plan.plan_quick(ALL, state, "c1", 60.0)  # 45 s usable, 12 s of controls: rechecks may use half of the rest
+        extra = sum(state["costs"][n] for k in p.rechecks for n in p.units[k] if n not in p.controls) * 3
+        self.assertLessEqual(extra, (45.0 - 12.0) * plan.RECHECK_SHARE)
+        self.assertLess(len(p.rechecks), 5)
+        self.assertTrue(p.rotating)
+
+    def test_update_recheck_sets_and_clears(self):
+        units = plan.units_of(ALL)
+        state = plan.default_state()
+        plan.update_recheck(state, units, ["p1, Length", "p1, hand-written", "Loose 01"], ["p1, Length", "Loose 01"])
+        self.assertEqual(state["recheck"], ["Loose 01", "p1"])
+        plan.update_recheck(state, units, ["p1, Length", "p1, hand-written"], [])  # p1 measured and clean now
+        self.assertEqual(state["recheck"], ["Loose 01"])
+        plan.update_recheck(state, units, ["p2, Length", "p2, hand-written"], [])  # Loose 01 not measured: stays
+        self.assertEqual(state["recheck"], ["Loose 01"])
 
 
 class RotationTest(unittest.TestCase):
@@ -84,16 +141,18 @@ class RotationTest(unittest.TestCase):
             seen.append(p)
         return state, seen
 
-    def test_every_benchmark_is_covered_within_the_announced_number_of_pushes(self):
-        bound = plan.plan_quick(ALL, state_with(), "commit0", 60.0).pushes_to_cover
-        _, seen = self.run_pushes(60.0, bound)
-        self.assertEqual(set().union(*(p.selected for p in seen)), set(ALL))
+    def test_everything_is_covered_within_the_announced_number_of_pushes(self):
+        for budget in (25.0, 40.0, 60.0):
+            bound = plan.plan_quick(ALL, state_with(), "commit0", budget).pushes_to_cover
+            self.assertGreater(bound, 1, budget)
+            _, seen = self.run_pushes(budget, bound)
+            self.assertEqual(set().union(*(p.selected for p in seen)), set(ALL), budget)
 
     def test_staleness_priority_goes_to_what_was_skipped_last_time(self):
         state, seen = self.run_pushes(60.0, 1)
         skipped = set(seen[0].skipped)
         second = plan.plan_quick(ALL, state, "commit1", 60.0)
-        self.assertTrue(set(second.rotating) <= skipped)
+        self.assertTrue(skipped <= set(second.rotating))  # all of them fit, so none waits twice
 
     def test_deterministic_for_a_commit_and_different_between_commits(self):
         a = plan.plan_quick(ALL, state_with(), "same", 60.0)

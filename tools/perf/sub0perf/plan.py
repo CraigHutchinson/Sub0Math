@@ -1,11 +1,20 @@
 """Planning a quick gate: which benchmarks, and how many rounds, fit a time budget.
 
-A quick gate measures every pair group (a library benchmark and its hand-written reference, which are also the
-environment controls) in every push, at a minimum round count, so a verdict on them means something. The remaining
-benchmarks rotate: the ones measured longest ago go first, ties are broken by a hash of the commit and the name (so the
-choice is deterministic for a commit and varies between commits), until the budget is used. What was measured when is
-kept in `.git/sub0perf/coverage/<target>.json` together with the measured cost of a sample, so the next plan is
-made from timings, not guesses.
+The unit of rotation is a group: a pair group (a library benchmark and its hand-written twin, measured back to back in
+the same rounds, so its ratio is a self-contained relative check, valid whenever it is selected) or a standalone
+benchmark. A quick gate measures:
+
+1. the controls, always: the CONTROLS cheapest hand-written references (not known to be bimodal), which absolute
+   verdicts need to factor the environment out. Two is the least that lets one disagree with the other;
+2. the groups that need a re-check: their last result was a regression that did not confirm, or inconclusive
+   (at most half of the spendable budget, stalest first);
+3. then whole groups, stalest first (never measured, then longest since last measured; ties are broken by a hash of the
+   commit and the group, so the choice for a commit is repeatable and differs between commits), while they fit.
+
+Every group is therefore covered within a bounded number of pushes, which the plan reports. If the stalest group alone
+is over the budget it is measured alone and the overrun is reported. What was measured when is kept in
+`.git/sub0perf/coverage/<target>.json` together with the measured cost of a sample, so the next plan is made from
+timings, not guesses.
 """
 
 import hashlib
@@ -17,39 +26,60 @@ from dataclasses import dataclass, field
 
 from .common import REFERENCE_MARK, atomic_write_text, group_of, read_json
 
-QUICK_ROUNDS = 3        # minimum (and default) interleaved rounds of the always-measured set: the least that gives a median and a spread
+QUICK_ROUNDS = 3        # interleaved rounds: the least that gives a median and a spread
+CONTROLS = 2            # hand-written references always measured, for the environment correction of absolute verdicts
 RESERVE = 0.25          # share of the budget kept back for confirmation and retry passes
+RECHECK_SHARE = 0.5     # share of the spendable budget that groups awaiting a re-check may take
 FALLBACK_COST = 1.0     # seconds per sample when nothing is known and no probe was made
 FALLBACK_ROUND_OVERHEAD = 2.0  # two steady calibrations per round, seconds
+MAX_COVER_PUSHES = 1000
 
 
-def mandatory_names(names):
-    """Every member of a group that has a hand-written reference: the pairs and the controls. Always measured in quick."""
-    groups = {group_of(n) for n in names if REFERENCE_MARK in n}
-    return sorted(n for n in names if group_of(n) in groups)
+def units_of(names):
+    """{unit key: [members]}: a group with a hand-written reference is one unit (its members run side by side);
+    every other benchmark is a unit of its own."""
+    paired = {group_of(n) for n in names if REFERENCE_MARK in n}
+    units = {}
+    for n in names:
+        units.setdefault(group_of(n) if group_of(n) in paired else n, []).append(n)
+    return units
 
 
-def tiebreak(commit, name):
-    return hashlib.sha1(f"{commit}:{name}".encode("utf-8")).hexdigest()
+def choose_controls(names, costs, avoid=(), count=CONTROLS, default_cost=FALLBACK_COST):
+    """The `count` cheapest hand-written references, skipping `avoid` (known bimodal) unless too few remain."""
+    refs = sorted((n for n in names if REFERENCE_MARK in n), key=lambda n: (costs.get(n, default_cost), n))
+    good = [n for n in refs if n not in set(avoid)]
+    return (good + [n for n in refs if n not in good])[:count]
 
 
-def rotation_order(names, benchmarks, commit):
-    """`names` by staleness: never measured first, then the least recently measured; deterministic for a commit."""
-    return sorted(names, key=lambda n: (benchmarks.get(n, {}).get("push", -1), tiebreak(commit, n)))
+def tiebreak(commit, key):
+    return hashlib.sha1(f"{commit}:{key}".encode("utf-8")).hexdigest()
+
+
+def unit_staleness(members, benchmarks):
+    """The push at which the stalest member was last measured (-1 = never)."""
+    return min(benchmarks.get(n, {}).get("push", -1) for n in members)
+
+
+def rotation_order(units, benchmarks, commit):
+    """Unit keys by staleness: never measured first, then the longest since measured; deterministic for a commit."""
+    return sorted(units, key=lambda k: (unit_staleness(units[k], benchmarks), tiebreak(commit, k)))
 
 
 @dataclass
 class Plan:
     rounds: int
     selected: list
-    mandatory: list
-    rotating: list              # the rotating benchmarks chosen this time
-    skipped: list               # the rotating benchmarks not chosen
+    units: dict                 # every unit key -> its members
+    controls: list
+    rechecks: list              # unit keys chosen because their last result needed a re-check
+    rotating: list              # unit keys chosen by staleness
+    skipped: list               # unit keys not chosen this time, stalest first
     estimate: float             # predicted seconds of the planned pass
     budget: float
     reserve: float              # seconds kept for confirmation and retry passes
-    overrun: float = 0.0        # seconds by which the mandatory set alone exceeds the budget
-    pushes_to_cover: int = 0    # pushes until every rotating benchmark has had a turn; 0 = none rotate, -1 = never at this budget
+    overrun: float = 0.0        # seconds by which the plan itself exceeds the budget
+    pushes_to_cover: int = 0    # pushes until every unit has had a turn, simulated from the costs
     notes: list = field(default_factory=list)
 
 
@@ -61,67 +91,100 @@ def default_cost_of(costs):
     return statistics.median(costs.values()) if costs else FALLBACK_COST
 
 
-def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERVE, default_cost=None):
-    """A Plan for measuring `names` within `budget` seconds. `state` is the coverage state (see load_state)."""
+def select(names, state, commit, budget, rounds, reserve, default_cost, avoid):
+    """(units, controls, rechecks, rotating, skipped, estimate, chosen benchmark names) for one push."""
     costs = state.get("costs", {})
     overhead = state.get("round_overhead", FALLBACK_ROUND_OVERHEAD)
+    units = units_of(names)
+    controls = choose_controls(names, costs, avoid, default_cost=default_cost)
+    chosen = set(controls)
+    cost_of = lambda n: costs.get(n, default_cost)
+
+    def added(key):
+        return rounds * sum(cost_of(n) for n in units[key] if n not in chosen)
+
+    estimate = rounds * (overhead + sum(cost_of(n) for n in controls))
+    spend = budget * (1 - reserve)
+    order = rotation_order(units, state.get("benchmarks", {}), commit)
+    rechecks, rotating, skipped = [], [], []
+    limit = estimate + max(0.0, spend - estimate) * RECHECK_SHARE
+    for k in (k for k in order if k in set(state.get("recheck", []))):
+        if estimate + added(k) <= limit:
+            rechecks.append(k)
+            estimate += added(k)
+            chosen |= set(units[k])
+    waiting = [k for k in order if k not in rechecks]
+    if waiting and not rechecks and estimate + added(waiting[0]) > spend:
+        # The stalest group does not fit even beside the controls: measure it alone (otherwise cheaper groups would keep
+        # it waiting for ever) and report the overrun.
+        k = waiting.pop(0)
+        estimate += added(k)
+        chosen |= set(units[k])
+        rotating.append(k)
+        skipped = waiting
+    else:
+        for k in waiting:
+            if estimate + added(k) <= spend:
+                rotating.append(k)
+                estimate += added(k)
+                chosen |= set(units[k])
+            else:
+                skipped.append(k)
+    return units, controls, rechecks, rotating, skipped, estimate, chosen
+
+
+def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERVE, default_cost=None, avoid=()):
+    """A Plan for measuring `names` within `budget` seconds. `state` is the coverage state (see load_state)."""
+    costs = state.get("costs", {})
     if default_cost is None:
         default_cost = default_cost_of(costs)
-    must = mandatory_names(names)
-    keep = budget * reserve
-    spend = budget - keep
-    base = rounds * round_cost(must, costs, overhead, default_cost)
-    estimate = base
-    chosen, skipped = [], []
+    units, controls, rechecks, rotating, skipped, estimate, chosen = select(names, state, commit, budget, rounds, reserve,
+                                                                           default_cost, avoid)
+    overrun = max(0.0, estimate - budget)
     notes = []
-    rest = rotation_order([n for n in names if n not in set(must)], state.get("benchmarks", {}), commit)
-    for n in rest:
-        extra = rounds * costs.get(n, default_cost)
-        if estimate + extra <= spend:
-            chosen.append(n)
-            estimate += extra
-        else:
-            skipped.append(n)
-    overrun = max(0.0, base - budget)
     if overrun:
-        notes.append(f"the always-measured pairs and controls alone are estimated at {base:.0f} s, over the {budget:.0f} s "
-                     f"budget by {overrun:.0f} s; they are measured anyway")
-    if not rest:
-        cover = 0
-    elif chosen:
-        cover = math.ceil(len(rest) / len(chosen))
-    else:
-        cover = -1
-    return Plan(rounds, sorted(must + chosen), must, chosen, skipped, estimate, budget, keep, overrun, cover, notes)
+        first = (rechecks + rotating)[0] if rechecks + rotating else "-"
+        notes.append(f"the controls and the first group ({first}) are estimated at {estimate:.0f} s, over the "
+                     f"{budget:.0f} s budget by {overrun:.0f} s; they are measured anyway")
+    # Replay the following pushes (no re-checks) to say how many it takes to give every group a turn.
+    sim = {"benchmarks": {n: dict(v) for n, v in state.get("benchmarks", {}).items()}, "costs": costs,
+           "round_overhead": state.get("round_overhead", FALLBACK_ROUND_OVERHEAD), "pushes": state.get("pushes", 0)}
+    covered, cover = set(), 0
+    picked = chosen
+    while cover < MAX_COVER_PUSHES:
+        cover += 1
+        covered |= {k for k, members in units.items() if set(members) & picked}
+        mark_measured(sim, picked, "sim", date="")
+        if len(covered) == len(units):
+            break
+        picked = select(names, sim, f"sim{cover}:{commit}", budget, rounds, reserve, default_cost, avoid)[-1]
+    return Plan(rounds, sorted(chosen), units, controls, rechecks, rotating, skipped, estimate, budget, budget * reserve, overrun,
+                cover, notes)
 
 
 def describe_plan(plan, total, state, commit):
     """The lines printed at the start of a quick gate: the plan and the coverage it gives."""
     benchmarks = state.get("benchmarks", {})
     pushes = state.get("pushes", 0)
-    rest = len(plan.rotating) + len(plan.skipped)
+    groups = len(plan.units)
     lines = [f"sub0perf: plan: {len(plan.selected)}/{total} benchmarks x {plan.rounds} rounds, estimated {plan.estimate:.0f} s of a "
              f"{plan.budget:.0f} s budget ({plan.reserve:.0f} s kept for confirmation and retries)",
-             f"sub0perf:   always measured: {len(plan.mandatory)} (every pair with its hand-written reference, and the controls); "
-             f"rotating this push: {len(plan.rotating)} of {rest}"]
+             f"sub0perf:   controls, always: {len(plan.controls)} hand-written reference(s) ({'; '.join(plan.controls)}); "
+             f"groups this push: {len(plan.rechecks) + len(plan.rotating)} of {groups} "
+             f"({len(plan.rechecks)} awaiting a re-check)"]
     lines += [f"sub0perf:   {note}" for note in plan.notes]
-    if rest:
-        if plan.pushes_to_cover > 0:
-            lines.append(f"sub0perf:   coverage: measured {len(plan.selected)}/{total} now; all covered within {plan.pushes_to_cover} push(es)")
-        else:
-            lines.append("sub0perf:   coverage: the rotating benchmarks never fit this budget; raise --budget, or run the full level")
-        after = {n: dict(v) for n, v in benchmarks.items()}
-        for n in plan.rotating:
-            after[n] = {"push": pushes + 1}
-        stalest = rotation_order(plan.rotating + plan.skipped, after, commit)[0]
-        last = after.get(stalest, {}).get("push", -1)
-        when = "never measured" if last < 0 else f"last measured {pushes + 1 - last} push(es) ago"
+    lines.append(f"sub0perf:   coverage: measured {len(plan.selected)}/{total} now; every group is covered within "
+                 f"{plan.pushes_to_cover} push(es)")
+    if plan.skipped:
+        stalest = plan.skipped[0]
+        last = unit_staleness(plan.units[stalest], benchmarks)
+        when = "never measured" if last < 0 else f"last measured {pushes - last} push(es) ago"
         lines.append(f"sub0perf:   stalest after this push: {stalest} ({when})")
     return lines
 
 
 def default_state():
-    return {"pushes": 0, "benchmarks": {}, "costs": {}, "round_overhead": FALLBACK_ROUND_OVERHEAD}
+    return {"pushes": 0, "benchmarks": {}, "costs": {}, "round_overhead": FALLBACK_ROUND_OVERHEAD, "recheck": []}
 
 
 def state_path(perf, target):
@@ -159,6 +222,14 @@ def absorb_timings(state, timings):
             state.setdefault("costs", {})[name] = round(statistics.median(seconds), 3)
     if timings.get("overhead"):
         state["round_overhead"] = round(statistics.median(timings["overhead"]), 3)
+
+
+def update_recheck(state, units, measured, flagged):
+    """Groups whose result this push was a regression (confirmed or not) or inconclusive are re-checked first next time;
+    a group measured this push without being flagged is cleared."""
+    measured, flagged = set(measured), set(flagged)
+    keep = {k for k in state.get("recheck", []) if k in units and not (set(units[k]) & measured)}
+    state["recheck"] = sorted(keep | {k for k, members in units.items() if set(members) & flagged})
 
 
 def new_timings():
