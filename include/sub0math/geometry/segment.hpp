@@ -103,17 +103,17 @@ template<typename T, std::size_t N>
 [[nodiscard]] constexpr SegmentPair<T, N> closestPoints(const Segment<T, N>& s1, const Segment<T, N>& s2) noexcept
 {
     using Scalar = ScalarOf<T>;
-    using Area = ProductType<T, T>;
+    using Product = ProductType<T, T>;
     // A pair whose directions differ by less than this fraction of |d1||d2| (sine squared) counts as parallel.
     constexpr Scalar ParallelFraction = Scalar{1e-14};
 
     const Vec<T, N> d1 = s1.b - s1.a;
     const Vec<T, N> d2 = s2.b - s2.a;
     const Vec<T, N> r = s1.a - s2.a;
-    const Area a = dot(d1, d1);
-    const Area e = dot(d2, d2);
-    const Area f = dot(d2, r);
-    const Area zero{};
+    const Product a = dot(d1, d1);
+    const Product e = dot(d2, d2);
+    const Product f = dot(d2, r);
+    const Product zero{};
     Scalar s{0};
     Scalar t{0};
     if (a == zero)
@@ -125,14 +125,14 @@ template<typename T, std::size_t N>
     }
     else
     {
-        const Area c = dot(d1, r);
+        const Product c = dot(d1, r);
         if (e == zero)
         {
             s = std::clamp(static_cast<Scalar>(-c / a), Scalar{0}, Scalar{1});
         }
         else
         {
-            const Area b = dot(d1, d2);
+            const Product b = dot(d1, d2);
             const auto denom = a * e - b * b;
             if (denom > ParallelFraction * (a * e))
             {

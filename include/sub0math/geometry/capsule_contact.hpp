@@ -178,7 +178,11 @@ template<typename T, std::size_t K>
         WitnessKind bestKind = WitnessKind::Edge;
         std::size_t bestIndex = 0;
         T bestT = T{0};
-        const auto tryEnd = [&](const Pt& end, const std::array<T, K>& outside, T endT) {
+        for (std::size_t side = 0; side < 2; ++side)
+        {
+            const Pt& end = side == 0 ? a : b;
+            const std::array<T, K>& outside = side == 0 ? outsideA : outsideB;
+            const T endT = side == 0 ? T{0} : T{1};
             for (std::size_t i = 0; i < K; ++i)
             {
                 if (!(outside[i] > T{0}))
@@ -201,9 +205,7 @@ template<typename T, std::size_t K>
                     bestIndex = along == T{1} ? next : i;
                 }
             }
-        };
-        tryEnd(a, outsideA, T{0});
-        tryEnd(b, outsideB, T{1});
+        }
         if (lineMisses)
         {
             // A vertex can face the interior of the axis: the support vertex on the polygon's side of the line.
