@@ -75,29 +75,29 @@ template<Real Rep>
 }
 
 /**
- * Computes the tangent of an angle with the C library: not bit-identical across platforms, so keep it off
- * simulation state.
+ * Computes the tangent of an angle with det::tan (fdlibm, bit-identical on every platform).
  *
  * @param angle An angle.
  * @return Its tangent.
  */
 template<Real Rep>
-[[nodiscard]] Rep tan(const Quantity<dim::Angle, Rep>& angle) noexcept
+[[nodiscard]] constexpr Rep tan(const Quantity<dim::Angle, Rep>& angle) noexcept
 {
-    return std::tan(angle.si());
+    return det::tan(angle.si());
 }
 
 /**
- * Computes the angle of a direction from two components of the same dimension.
+ * Computes the angle of a direction from two components of the same dimension, with det::atan2 (bit-identical on
+ * every platform).
  *
  * @param y Second component.
  * @param x First component.
  * @return The angle in (-pi, pi].
  */
 template<typename D, Real Rep>
-[[nodiscard]] Quantity<dim::Angle, Rep> atan2(const Quantity<D, Rep>& y, const Quantity<D, Rep>& x) noexcept
+[[nodiscard]] constexpr Quantity<dim::Angle, Rep> atan2(const Quantity<D, Rep>& y, const Quantity<D, Rep>& x) noexcept
 {
-    return Quantity<dim::Angle, Rep>::fromSi(std::atan2(y.si(), x.si()));
+    return Quantity<dim::Angle, Rep>::fromSi(det::atan2(y.si(), x.si()));
 }
 
 /**

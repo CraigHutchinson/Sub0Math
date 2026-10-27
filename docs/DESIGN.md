@@ -51,18 +51,21 @@ but not `sin`, `cos`, `exp`, `pow` and the rest: each C library rounds them diff
 matched on every Windows build and differed on Linux and macOS, with libm `sin`/`cos` the only cause).
 `sub0math::det` (`number/det_math.hpp`) therefore supplies our own, and state paths use them in place of `<cmath>`.
 
-- **Algorithm:** Sun fdlibm (`__kernel_sin`, `__kernel_cos`, `__ieee754_rem_pio2` with Payne-Hanek for huge
-  arguments), the code behind V8's `Math.sin`/`Math.cos`. Results are bit-identical to V8, which gives
+- **Algorithm:** Sun fdlibm (`__kernel_sin`, `__kernel_cos`, `__kernel_tan`, `__ieee754_rem_pio2` with Payne-Hanek
+  for huge arguments, `s_atan`, `e_atan2`), the code behind V8's `Math.sin`/`cos`/`tan`/`atan`/`atan2`. Results are bit-identical to V8, which gives
   JavaScript parity for ports. Under 0.8 ulp worst case over 60,000 inputs of every magnitude. The fdlibm
   notice is preserved in the header and in `NOTICE.md`; its terms are compatible with the MIT licence.
-- **Provided:** `det::sin`, `det::cos`, `det::sincos` (one shared reduction), `det::exp`, `det::log` (all
-  bit-identical to V8), double and float for the trigonometric ones (float is the double result rounded, so it is
+- **Provided:** `det::sin`, `det::cos`, `det::sincos` (one shared reduction), `det::tan`, `det::atan`, `det::atan2`
+  (y first), `det::exp`, `det::log` (all bit-identical to V8; `atan2` checked over every pair of zeros, subnormals,
+  infinities and NaN as well as 50,000 generated pairs in all quadrants and at ratios from 2^-200 to 2^200), double
+  and float for the trigonometric ones (float is the double result rounded, so it is
   deterministic too), `constexpr` and `noexcept`; any finite input, NaN for infinities and NaN as IEEE says.
   `det::pow` is our own: exact repeated squaring for whole exponents up to 1024 (so `x^2` is `x * x`), else
-  `exp(y log x)`, about `|y log x|` ulp. Not yet provided: `tan`, `atan2`, `asin`/`acos`, `sinh`/`cosh`; a call
-  site that needs one on state adds it here, not a libm call.
-- **Units:** the `Angle`-typed `sin`, `cos` and the new `sincos` call `det::`; `tan` still calls the C library
-  and is documented as unfit for state. `sqrt` stays `std::sqrt` (exactly rounded by IEEE).
+  `exp(y log x)`, about `|y log x|` ulp. Accuracy: `atan` 0.81 ulp, `tan` 0.82 ulp and `atan2` 1.21 ulp worst case (mpmath at 200 bits; `atan2` adds the
+  rounding of `y / x`). `tan` was cheap (one more kernel on the existing reduction), so it is provided. Not yet
+  provided: `asin`/`acos`, `sinh`/`cosh`; a call site that needs one on state adds it here, not a libm call.
+- **Units:** the `Angle`-typed `sin`, `cos`, `sincos`, `tan` and `atan2` call `det::`, as does
+  `Quat::fromAxisAngle`; `asin`/`acos` still call the C library and are unfit for state. `sqrt` stays `std::sqrt` (exactly rounded by IEEE).
 - **Contract:** only `+ - *` and exact scaling are used, so the bits depend on the compiler not fusing
   multiply-add: build with `sub0math_target_deterministic_fp` (`-ffp-contract=off`). Measured: identical with
   GCC, GCC `-march=x86-64-v3` and Clang `-march=x86-64-v3`.

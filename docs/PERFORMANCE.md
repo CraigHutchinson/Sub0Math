@@ -374,12 +374,13 @@ repository moves its timings: re-record the baselines deliberately, with the rea
 
 Library calls are the other source of platform differences: `std::sin`, `std::cos`, `std::exp`, `std::pow` and
 friends are not specified to the last bit, and differ between MinGW, glibc and libSystem even with identical
-flags. State paths call `sub0math::det::sin/cos/sincos` (fdlibm, equal to V8 `Math.sin/cos`), `det::exp`, `det::log`, `det::pow` instead; see
+flags. State paths call `sub0math::det::sin/cos/sincos/tan/atan/atan2` (fdlibm, equal to V8 `Math.*`), `det::exp`, `det::log`, `det::pow` instead; see
 DESIGN.md, "Deterministic transcendentals". Cost measured against the C library on the development host (GCC 16
 -O3, MinGW-w64 UCRT, 1024 values per op, pair `sin+cos x1024`): `det::sin` plus `det::cos` at 0.89x of
 `std::sin` plus `std::cos` for |x| <= 4, 1.15x for |x| <= 1000 and 1.37x for |x| <= 1e6 (huge arguments take
-the slow reduction); `det::sincos` 0.75x, 0.91x and 1.05x. No optimising was done, so the three-pass rule has
-not been triggered.
+the slow reduction); `det::sincos` 0.75x, 0.91x and 1.05x. `det::atan2` against `std::atan2` (1024 values over
+all quadrants, same build, three runs): 0.71x (4.8 us against 6.8 us per 1024), so it is faster than the C library
+here. No optimising was done, so the three-pass rule has not been triggered.
 
 On MinGW-w64 GCC, the helper also adds `-Wa,-muse-unaligned-vector-move` when the assembler supports it.
 Windows guarantees only 16-byte stack alignment, but AVX code spills 32-byte vectors with aligned moves,

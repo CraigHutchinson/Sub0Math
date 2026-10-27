@@ -1,14 +1,15 @@
 #pragma once
 
 /*
- * Deterministic sine, cosine, exp, log and pow.
+ * Deterministic sine, cosine, tangent, arctangent, atan2, exp, log and pow.
  *
  * The algorithms are Sun Microsystems' fdlibm (as in FreeBSD msun and V8's src/base/ieee754.cc):
- * __kernel_sin, __kernel_cos, __ieee754_rem_pio2 and __kernel_rem_pio2 (Payne-Hanek for large arguments),
- * __ieee754_exp and __ieee754_log.
+ * __kernel_sin, __kernel_cos, __kernel_tan, __ieee754_rem_pio2 and __kernel_rem_pio2 (Payne-Hanek for large
+ * arguments), __ieee754_exp, __ieee754_log, s_atan and e_atan2.
  * Using only +, -, * and exact scaling, they give the same bits on every IEEE-754 binary64 platform when
  * the compiler does not fuse multiply-add (build with -ffp-contract=off; see sub0math_target_deterministic_fp),
- * and the same bits as JavaScript's Math.sin, Math.cos, Math.exp and Math.log in V8. pow is our own.
+ * and the same bits as JavaScript's Math.sin, Math.cos, Math.tan, Math.atan, Math.atan2, Math.exp and Math.log in V8.
+ * pow is our own.
  *
  * Original fdlibm notice, preserved as its terms require:
  *
@@ -52,6 +53,12 @@ constexpr double fromHighWord(std::int32_t high) noexcept
 constexpr double fromWords(std::int32_t high, std::uint32_t low) noexcept
 {
     return std::bit_cast<double>((static_cast<std::uint64_t>(static_cast<std::uint32_t>(high)) << 32) | low);
+}
+
+// |x| by clearing the sign bit, so that -0 gives +0 and NaN keeps its payload (a comparison cannot do either).
+constexpr double absolute(double x) noexcept
+{
+    return std::bit_cast<double>(std::bit_cast<std::uint64_t>(x) & 0x7fffffffffffffffULL);
 }
 
 // Exact power of two for -1022 <= n <= 1023.
@@ -534,6 +541,149 @@ constexpr double cosFromReduction(const Reduced& r) noexcept
     }
 }
 
+
+// fdlibm __kernel_tan: tan(x + y) on |x| <= pi/4; iy = 1 for tan, -1 for -1/tan (odd quadrants).
+constexpr double kernelTan(double x, double y, int iy) noexcept
+{
+    constexpr double T[13] = {3.33333333333334091986e-01, 1.33333333333201242699e-01,  5.39682539762260521377e-02,
+                              2.18694882948595424599e-02, 8.86323982359930005737e-03,  3.59207910759131235356e-03,
+                              1.45620945432529025516e-03, 5.88041240820264096874e-04,  2.46463134818469906812e-04,
+                              7.81794442939557092300e-05, 7.14072491382608190305e-05,  -1.85586374855275456654e-05,
+                              2.59073051863633712884e-05};
+    constexpr double pio4 = 7.85398163397448278999e-01;
+    constexpr double pio4lo = 3.06161699786838301793e-17;
+
+    const std::int32_t hx = highWord(x);
+    const std::int32_t ix = hx & 0x7fffffff;
+    if (ix < 0x3e300000 && static_cast<int>(x) == 0) // |x| < 2^-28
+    {
+        const auto lx = static_cast<std::int32_t>(static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(x)));
+        if (((ix | lx) | (iy + 1)) == 0)
+        {
+            return 1.0 / absolute(x);
+        }
+        if (iy == 1)
+        {
+            return x;
+        }
+        // Compute -1 / (x + y) carefully.
+        const double w = x + y;
+        const double z = fromWords(highWord(w), 0);
+        const double v = y - (z - x);
+        const double a = -1.0 / w;
+        const double t = fromWords(highWord(a), 0);
+        const double s = 1.0 + t * z;
+        return t + a * (s + t * v);
+    }
+    if (ix >= 0x3FE59428) // |x| >= 0.6744
+    {
+        if (hx < 0)
+        {
+            x = -x;
+            y = -y;
+        }
+        const double z = pio4 - x;
+        const double w = pio4lo - y;
+        x = z + w;
+        y = 0.0;
+    }
+    const double z = x * x;
+    const double w = z * z;
+    double r = T[1] + w * (T[3] + w * (T[5] + w * (T[7] + w * (T[9] + w * T[11]))));
+    double v = z * (T[2] + w * (T[4] + w * (T[6] + w * (T[8] + w * (T[10] + w * T[12])))));
+    const double s = z * x;
+    r = y + z * (s * (r + v) + y);
+    r += T[0] * s;
+    const double sum = x + r;
+    if (ix >= 0x3FE59428)
+    {
+        v = static_cast<double>(iy);
+        return static_cast<double>(1 - ((hx >> 30) & 2)) * (v - 2.0 * (x - (sum * sum / (sum + v) - r)));
+    }
+    if (iy == 1)
+    {
+        return sum;
+    }
+    // Compute -1.0 / (x + r) accurately.
+    const double zz = fromWords(highWord(sum), 0);
+    v = r - (zz - x);
+    const double a = -1.0 / sum;
+    const double t = fromWords(highWord(a), 0);
+    const double s2 = 1.0 + t * zz;
+    return t + a * (s2 + t * v);
+}
+
+// fdlibm atan (s_atan.c).
+constexpr double atanCore(double x) noexcept
+{
+    constexpr double atanhi[4] = {4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01,
+                                  1.57079632679489655800e+00};
+    constexpr double atanlo[4] = {2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17,
+                                  6.12323399573676603587e-17};
+    constexpr double aT[11] = {3.33333333333329318027e-01,  -1.99999999998764832476e-01, 1.42857142725034663711e-01,
+                               -1.11111104054623557880e-01, 9.09088713343650656196e-02,  -7.69187620504482999495e-02,
+                               6.66107313738753120669e-02,  -5.83357013379057348645e-02, 4.97687799461593236017e-02,
+                               -3.65315727442169155270e-02, 1.62858201153657823623e-02};
+
+    const std::int32_t hx = highWord(x);
+    const std::int32_t ix = hx & 0x7fffffff;
+    if (ix >= 0x44100000) // |x| >= 2^66
+    {
+        const auto lx = static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(x));
+        if (ix > 0x7ff00000 || (ix == 0x7ff00000 && lx != 0))
+        {
+            return x + x; // NaN
+        }
+        return hx > 0 ? atanhi[3] + atanlo[3] : -atanhi[3] - atanlo[3];
+    }
+    int id = 0;
+    if (ix < 0x3fdc0000) // |x| < 0.4375
+    {
+        if (ix < 0x3e200000) // |x| < 2^-29
+        {
+            return x;
+        }
+        id = -1;
+    }
+    else
+    {
+        x = absolute(x);
+        if (ix < 0x3ff30000) // |x| < 1.1875
+        {
+            if (ix < 0x3fe60000) // 7/16 <= |x| < 11/16
+            {
+                id = 0;
+                x = (2.0 * x - 1.0) / (2.0 + x);
+            }
+            else // 11/16 <= |x| < 19/16
+            {
+                id = 1;
+                x = (x - 1.0) / (x + 1.0);
+            }
+        }
+        else if (ix < 0x40038000) // |x| < 2.4375
+        {
+            id = 2;
+            x = (x - 1.5) / (1.0 + 1.5 * x);
+        }
+        else // 2.4375 <= |x| < 2^66
+        {
+            id = 3;
+            x = -1.0 / x;
+        }
+    }
+    const double z = x * x;
+    const double w = z * z;
+    const double s1 = z * (aT[0] + w * (aT[2] + w * (aT[4] + w * (aT[6] + w * (aT[8] + w * aT[10])))));
+    const double s2 = w * (aT[1] + w * (aT[3] + w * (aT[5] + w * (aT[7] + w * aT[9]))));
+    if (id < 0)
+    {
+        return x - x * (s1 + s2);
+    }
+    const double r = atanhi[id] - ((x * (s1 + s2) - atanlo[id]) - x);
+    return hx < 0 ? -r : r;
+}
+
 } // namespace detail
 
 /**
@@ -862,6 +1012,160 @@ struct SinCos
 }
 
 /**
+ * Computes the tangent of an angle in radians, bit-identically on every platform (fdlibm; equals V8 Math.tan).
+ *
+ * Within 1 ulp; NaN for infinities and NaN. Shares the argument reduction with sin and cos.
+ *
+ * @param x The angle in radians.
+ * @return tan(x).
+ * @see sin for the determinism contract.
+ */
+[[nodiscard]] constexpr double tan(double x) noexcept
+{
+    const std::int32_t ix = detail::highWord(x) & 0x7fffffff;
+    if (ix <= 0x3fe921fb)
+    {
+        return detail::kernelTan(x, 0.0, 1);
+    }
+    if (ix >= 0x7ff00000)
+    {
+        return x - x;
+    }
+    const detail::Reduced r = detail::remPio2(x);
+    return detail::kernelTan(r.y0, r.y1, 1 - ((r.n & 1) << 1));
+}
+
+/**
+ * Computes the arctangent, bit-identically on every platform (fdlibm s_atan.c; equals V8 Math.atan).
+ *
+ * Within 1 ulp, result in [-pi/2, pi/2]; atan(+-0) = +-0, atan(+-infinity) = +-pi/2, NaN stays NaN.
+ *
+ * @param x The argument.
+ * @return atan(x).
+ */
+[[nodiscard]] constexpr double atan(double x) noexcept
+{
+    return detail::atanCore(x);
+}
+
+/**
+ * Computes the angle of the point (x, y) in (-pi, pi], bit-identically on every platform (fdlibm e_atan2.c; equals
+ * V8 Math.atan2).
+ *
+ * All the IEEE special cases: atan2(+-0, +0) = +-0, atan2(+-0, -0) = +-pi, atan2(+-0, x < 0) = +-pi,
+ * atan2(y, +-0) = +-pi/2, infinities give multiples of pi/4, NaN if either argument is NaN. Note the argument order:
+ * y first.
+ *
+ * @param y The ordinate.
+ * @param x The abscissa.
+ * @return The angle from the positive x axis to (x, y).
+ */
+[[nodiscard]] constexpr double atan2(double y, double x) noexcept
+{
+    constexpr double tiny = 1.0e-300;
+    constexpr double piO4 = 7.8539816339744827900E-01;
+    constexpr double piO2 = 1.5707963267948965580E+00;
+    constexpr double pi = 3.1415926535897931160E+00;
+    constexpr double piLo = 1.2246467991473531772E-16;
+
+    const std::int32_t hx = detail::highWord(x);
+    const std::int32_t ix = hx & 0x7fffffff;
+    const auto lx = static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(x));
+    const std::int32_t hy = detail::highWord(y);
+    const std::int32_t iy = hy & 0x7fffffff;
+    const auto ly = static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(y));
+
+    // NaN if either argument is.
+    if (ix > 0x7ff00000 || (ix == 0x7ff00000 && lx != 0) || iy > 0x7ff00000 || (iy == 0x7ff00000 && ly != 0))
+    {
+        return x + y;
+    }
+    if (hx == 0x3ff00000 && lx == 0) // x = 1.0
+    {
+        return atan(y);
+    }
+    int m = ((hy >> 31) & 1) | ((hx >> 30) & 2); // 2 * sign(x) + sign(y)
+
+    if ((static_cast<std::uint32_t>(iy) | ly) == 0) // y = 0
+    {
+        switch (m)
+        {
+        case 0:
+        case 1:
+            return y; // atan(+-0, +anything) = +-0
+        case 2:
+            return pi + tiny; // atan(+0, -anything) = pi
+        default:
+            return -pi - tiny; // atan(-0, -anything) = -pi
+        }
+    }
+    if ((static_cast<std::uint32_t>(ix) | lx) == 0) // x = 0
+    {
+        return hy < 0 ? -piO2 - tiny : piO2 + tiny;
+    }
+    if (ix == 0x7ff00000) // x = INF
+    {
+        if (iy == 0x7ff00000)
+        {
+            switch (m)
+            {
+            case 0:
+                return piO4 + tiny;
+            case 1:
+                return -piO4 - tiny;
+            case 2:
+                return 3.0 * piO4 + tiny;
+            default:
+                return -3.0 * piO4 - tiny;
+            }
+        }
+        switch (m)
+        {
+        case 0:
+            return 0.0;
+        case 1:
+            return -0.0;
+        case 2:
+            return pi + tiny;
+        default:
+            return -pi - tiny;
+        }
+    }
+    if (iy == 0x7ff00000) // y = INF
+    {
+        return hy < 0 ? -piO2 - tiny : piO2 + tiny;
+    }
+
+    // Compute y / x.
+    const int k = (iy - ix) >> 20;
+    double z = 0.0;
+    if (k > 60) // |y / x| > 2^60
+    {
+        z = piO2 + 0.5 * piLo;
+        m &= 1;
+    }
+    else if (hx < 0 && k < -60) // 0 > |y| / x > -2^-60
+    {
+        z = 0.0;
+    }
+    else
+    {
+        z = atan(detail::absolute(y / x)); // |-0| must be +0
+    }
+    switch (m)
+    {
+    case 0:
+        return z; // atan(+, +)
+    case 1:
+        return -z; // atan(-, +)
+    case 2:
+        return pi - (z - piLo); // atan(+, -)
+    default:
+        return (z - piLo) - pi; // atan(-, -)
+    }
+}
+
+/**
  * Computes the sine in single precision: the double result rounded to float (deterministic).
  *
  * @param x The angle in radians.
@@ -893,6 +1197,40 @@ struct SinCos
 {
     const SinCos<double> r = sincos(static_cast<double>(x));
     return {static_cast<float>(r.sin), static_cast<float>(r.cos)};
+}
+
+/**
+ * Computes the tangent in single precision: the double result rounded to float (deterministic).
+ *
+ * @param x The angle in radians.
+ * @return tan(x).
+ */
+[[nodiscard]] constexpr float tan(float x) noexcept
+{
+    return static_cast<float>(tan(static_cast<double>(x)));
+}
+
+/**
+ * Computes the arctangent in single precision.
+ *
+ * @param x The argument.
+ * @return atan(x).
+ */
+[[nodiscard]] constexpr float atan(float x) noexcept
+{
+    return static_cast<float>(atan(static_cast<double>(x)));
+}
+
+/**
+ * Computes the angle of (x, y) in single precision: the double result rounded to float.
+ *
+ * @param y The ordinate.
+ * @param x The abscissa.
+ * @return The angle in (-pi, pi].
+ */
+[[nodiscard]] constexpr float atan2(float y, float x) noexcept
+{
+    return static_cast<float>(atan2(static_cast<double>(y), static_cast<double>(x)));
 }
 
 } // namespace sub0math::det

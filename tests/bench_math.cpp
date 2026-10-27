@@ -748,6 +748,35 @@ void benchSinCos(sub0bench::BenchRunner& runner, const char* range, double scale
     });
 }
 
+void benchAtan2(sub0bench::BenchRunner& runner)
+{
+    std::vector<double> y(Count);
+    std::vector<double> x(Count);
+    for (std::size_t i = 0; i < Count; ++i)
+    {
+        const double t = static_cast<double>(i) / static_cast<double>(Count);
+        y[i] = std::sin(t * 40.0 + 0.3) * (1.0 + 9.0 * t); // all four quadrants, ratios of a few orders
+        x[i] = std::cos(t * 53.0 + 1.1) * (10.0 - 9.0 * t);
+    }
+    std::vector<double> out(Count);
+
+    // The hand-written twin is the C library call: det:: must stay close to it while being bit-identical everywhere.
+    runner.run("atan2 x1024, hand-written std::atan2", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            out[k] = std::atan2(y[k], x[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(out.data());
+    });
+    runner.run("atan2 x1024, det::atan2", [&] {
+        for (std::size_t k = 0; k < Count; ++k)
+        {
+            out[k] = det::atan2(y[k], x[k]);
+        }
+        ankerl::nanobench::doNotOptimizeAway(out.data());
+    });
+}
+
 } // namespace
 
 
@@ -781,5 +810,6 @@ int main(int argc, char** argv)
     benchSinCos(runner, "|x|<=4", 4.0);
     benchSinCos(runner, "|x|<=1000", 1000.0);
     benchSinCos(runner, "|x|<=1e6", 1.0e6);
+    benchAtan2(runner);
     return runner.finish();
 }

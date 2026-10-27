@@ -4,6 +4,7 @@
 
 #include "sub0math/linear/mat.hpp"
 #include "sub0math/linear/vec.hpp"
+#include "sub0math/number/det_math.hpp"
 #include "sub0math/number/real.hpp"
 #include "sub0math/units/dimension.hpp"
 #include "sub0math/units/quantity.hpp"
@@ -37,8 +38,8 @@ struct Quat
     [[nodiscard]] static Quat fromAxisAngle(const Vec<T, 3>& unitAxis, const Quantity<dim::Angle, T>& angle) noexcept
     {
         const T half = angle.si() / T{2};
-        const T s = std::sin(half);
-        return Quat{std::cos(half), unitAxis.x * s, unitAxis.y * s, unitAxis.z * s};
+        const det::SinCos<T> sc = det::sincos(half);
+        return Quat{sc.cos, unitAxis.x * sc.sin, unitAxis.y * sc.sin, unitAxis.z * sc.sin};
     }
 
     /**

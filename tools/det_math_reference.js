@@ -105,3 +105,66 @@ console.log('// ExpLogCount', ExpLogCount, 'exp digest', hex(he), 'log digest', 
 for (const x of [0, -0, 1, -1, 0.5, 2, 10, 100, 709, 709.78, 710, -745, -745.2, -746, 1e-10, 5e-324, Infinity, -Infinity, NaN]) {
     console.log(`    {${hex(canon(x))}, ${hex(canon(Math.exp(x)))}, ${hex(canon(Math.log(x)))}}, // ${x}`);
 }
+
+// ---- tan, atan, atan2 ----
+function tanInput(i) { // sin/cos generator reused, plus a dense cluster near the poles
+    const u = splitmix64(i + 13000000);
+    const unit = Number(u >> 11n) * 2 ** -53;
+    switch (i % 4) {
+    case 0: return (unit * 2 - 1) * 4;
+    case 1: return (unit * 2 - 1) * 1000;
+    case 2: { // within an ulp of an odd multiple of pi/2, where tan is huge
+        const x = (Math.trunc((unit * 2 - 1) * 1000) * 2 + 1) * HalfPi;
+        return fromBits(bitsOf(x) + BigInt(Number(u & 3n) - 1));
+    }
+    default: return input(i);
+    }
+}
+function atanInput(i) {
+    const u = splitmix64(i + 15000000);
+    const unit = Number(u >> 11n) * 2 ** -53;
+    switch (i % 5) {
+    case 0: return (unit * 2 - 1) * 3;
+    case 1: return (unit * 2 - 1) * 1e6;
+    case 2: return fromBits(u & 0x7FFFFFFFFFFFFFFFn); // any non-negative pattern
+    case 3: return fromBits(u); // any pattern, signs included
+    default: return (unit * 2 - 1) * 2 ** Number(splitmix64(i + 17000000) % 140n - 70n); // 2^-70 .. 2^70
+    }
+}
+function atan2Input(i) {
+    const u = splitmix64(i + 19000000);
+    const v = splitmix64(i + 21000000);
+    const ux = Number(u >> 11n) * 2 ** -53;
+    const uy = Number(v >> 11n) * 2 ** -53;
+    switch (i % 5) {
+    case 0: return [(uy * 2 - 1) * 10, (ux * 2 - 1) * 10]; // all quadrants
+    case 1: return [(uy * 2 - 1) * 2 ** Number(splitmix64(i + 23000000) % 200n - 100n),
+                    (ux * 2 - 1) * 2 ** Number(splitmix64(i + 25000000) % 200n - 100n)]; // huge and tiny ratios
+    case 2: return [fromBits(v), fromBits(u)]; // any patterns
+    case 3: return [fromBits(v & 0x800FFFFFFFFFFFFFn | (BigInt(Number(u % 40n) + 1003) << 52n)),
+                    fromBits(u & 0x800FFFFFFFFFFFFFn)]; // x subnormal or tiny
+    default: return [(uy * 2 - 1) * 4, (ux < 0.5 ? -1 : 1) * 2 ** -(Number(u % 30n))]; // small |x|
+    }
+}
+const TanCount = 40000;
+const AtanCount = 40000;
+const Atan2Count = 50000;
+let ht = 0xCBF29CE484222325n;
+let ha = 0xCBF29CE484222325n;
+let h2 = 0xCBF29CE484222325n;
+for (let i = 0; i < TanCount; ++i) ht = fnv(ht, canon(Math.tan(tanInput(i))));
+for (let i = 0; i < AtanCount; ++i) ha = fnv(ha, canon(Math.atan(atanInput(i))));
+for (let i = 0; i < Atan2Count; ++i) { const [y, x] = atan2Input(i); h2 = fnv(h2, canon(Math.atan2(y, x))); }
+console.log('// TanCount', TanCount, 'digest', hex(ht), 'AtanCount', AtanCount, 'digest', hex(ha),
+            'Atan2Count', Atan2Count, 'digest', hex(h2));
+const num = (v) => (Object.is(v, -0) ? '-0' : String(v));
+console.log('// {y bits, x bits, atan2 bits}');
+const edge = [0, -0, 5e-324, -5e-324, 1e-300, 1, -1, 2, 0.5, 1e300, Infinity, -Infinity, NaN];
+for (const y of edge) for (const x of edge) {
+    console.log(`    {${hex(canon(y))}, ${hex(canon(x))}, ${hex(canon(Math.atan2(y, x)))}}, // ${num(y)}, ${num(x)}`);
+}
+console.log('// {x bits, atan bits, tan bits}');
+for (const x of [0, -0, 5e-324, 2 ** -29, 2 ** -28, 0.4375, 0.6875, 0.6744, 1, 1.1875, 2.4375, 3, 1e10, 2 ** 66, 1e300,
+                 -1, -0.5, 1.5707963267948966, 3.141592653589793, 1e22, Infinity, -Infinity, NaN]) {
+    console.log(`    {${hex(canon(x))}, ${hex(canon(Math.atan(x)))}, ${hex(canon(Math.tan(x)))}}, // ${num(x)}`);
+}

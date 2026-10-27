@@ -352,3 +352,400 @@ TEST_CASE("det pow: exact for whole exponents, close to the C library otherwise"
     MESSAGE("pow worst relative error vs long double: ", worst);
     CHECK(worst < 5e-15);
 }
+
+// ---- tan, atan, atan2 ----
+
+namespace
+{
+
+double tanInput(std::uint64_t i)
+{
+    const std::uint64_t u = splitmix64(i + 13000000);
+    const double unit = static_cast<double>(u >> 11) * 0x1p-53;
+    switch (i % 4)
+    {
+    case 0:
+        return (unit * 2 - 1) * 4;
+    case 1:
+        return (unit * 2 - 1) * 1000;
+    case 2: // within an ulp of an odd multiple of pi/2, where tan is huge
+    {
+        const double x = (std::trunc((unit * 2 - 1) * 1000) * 2 + 1) * HalfPi;
+        return std::bit_cast<double>(bitsOf(x) + ((u & 3) - 1));
+    }
+    default:
+        return referenceInput(i);
+    }
+}
+
+double atanInput(std::uint64_t i)
+{
+    const std::uint64_t u = splitmix64(i + 15000000);
+    const double unit = static_cast<double>(u >> 11) * 0x1p-53;
+    switch (i % 5)
+    {
+    case 0:
+        return (unit * 2 - 1) * 3;
+    case 1:
+        return (unit * 2 - 1) * 1e6;
+    case 2:
+        return std::bit_cast<double>(u & 0x7FFFFFFFFFFFFFFFULL);
+    case 3:
+        return std::bit_cast<double>(u);
+    default:
+        return (unit * 2 - 1) * std::ldexp(1.0, static_cast<int>(splitmix64(i + 17000000) % 140) - 70);
+    }
+}
+
+struct Atan2Input
+{
+    double y;
+    double x;
+};
+
+Atan2Input atan2Input(std::uint64_t i)
+{
+    const std::uint64_t u = splitmix64(i + 19000000);
+    const std::uint64_t v = splitmix64(i + 21000000);
+    const double ux = static_cast<double>(u >> 11) * 0x1p-53;
+    const double uy = static_cast<double>(v >> 11) * 0x1p-53;
+    switch (i % 5)
+    {
+    case 0:
+        return {(uy * 2 - 1) * 10, (ux * 2 - 1) * 10};
+    case 1:
+        return {(uy * 2 - 1) * std::ldexp(1.0, static_cast<int>(splitmix64(i + 23000000) % 200) - 100),
+                (ux * 2 - 1) * std::ldexp(1.0, static_cast<int>(splitmix64(i + 25000000) % 200) - 100)};
+    case 2:
+        return {std::bit_cast<double>(v), std::bit_cast<double>(u)};
+    case 3:
+        return {std::bit_cast<double>((v & 0x800FFFFFFFFFFFFFULL) | ((u % 40 + 1003) << 52)),
+                std::bit_cast<double>(u & 0x800FFFFFFFFFFFFFULL)};
+    default:
+        return {(uy * 2 - 1) * 4, (ux < 0.5 ? -1.0 : 1.0) * std::ldexp(1.0, -static_cast<int>(u % 30))};
+    }
+}
+
+constexpr std::uint64_t TanCount = 40000;
+constexpr std::uint64_t AtanCount = 40000;
+constexpr std::uint64_t Atan2Count = 50000;
+constexpr std::uint64_t V8TanDigest = 0x60f82ca28c826b12ULL;
+constexpr std::uint64_t V8AtanDigest = 0x73ae1dfb71b85987ULL;
+constexpr std::uint64_t V8Atan2Digest = 0x0222c7e45a061ba1ULL;
+
+// Node 24 Math.atan2 over the edge values 0, -0, 5e-324, -5e-324, 1e-300, 1, -1, 2, 0.5, 1e300, +-inf, NaN:
+// {y, x, atan2(y, x)}.
+constexpr Expected V8Atan2[] = {
+    {0x0000000000000000, 0x0000000000000000, 0x0000000000000000}, // 0, 0
+    {0x0000000000000000, 0x8000000000000000, 0x400921fb54442d18}, // 0, -0
+    {0x0000000000000000, 0x0000000000000001, 0x0000000000000000}, // 0, 5e-324
+    {0x0000000000000000, 0x8000000000000001, 0x400921fb54442d18}, // 0, -5e-324
+    {0x0000000000000000, 0x01a56e1fc2f8f359, 0x0000000000000000}, // 0, 1e-300
+    {0x0000000000000000, 0x3ff0000000000000, 0x0000000000000000}, // 0, 1
+    {0x0000000000000000, 0xbff0000000000000, 0x400921fb54442d18}, // 0, -1
+    {0x0000000000000000, 0x4000000000000000, 0x0000000000000000}, // 0, 2
+    {0x0000000000000000, 0x3fe0000000000000, 0x0000000000000000}, // 0, 0.5
+    {0x0000000000000000, 0x7e37e43c8800759c, 0x0000000000000000}, // 0, 1e+300
+    {0x0000000000000000, 0x7ff0000000000000, 0x0000000000000000}, // 0, Infinity
+    {0x0000000000000000, 0xfff0000000000000, 0x400921fb54442d18}, // 0, -Infinity
+    {0x0000000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // 0, NaN
+    {0x8000000000000000, 0x0000000000000000, 0x8000000000000000}, // -0, 0
+    {0x8000000000000000, 0x8000000000000000, 0xc00921fb54442d18}, // -0, -0
+    {0x8000000000000000, 0x0000000000000001, 0x8000000000000000}, // -0, 5e-324
+    {0x8000000000000000, 0x8000000000000001, 0xc00921fb54442d18}, // -0, -5e-324
+    {0x8000000000000000, 0x01a56e1fc2f8f359, 0x8000000000000000}, // -0, 1e-300
+    {0x8000000000000000, 0x3ff0000000000000, 0x8000000000000000}, // -0, 1
+    {0x8000000000000000, 0xbff0000000000000, 0xc00921fb54442d18}, // -0, -1
+    {0x8000000000000000, 0x4000000000000000, 0x8000000000000000}, // -0, 2
+    {0x8000000000000000, 0x3fe0000000000000, 0x8000000000000000}, // -0, 0.5
+    {0x8000000000000000, 0x7e37e43c8800759c, 0x8000000000000000}, // -0, 1e+300
+    {0x8000000000000000, 0x7ff0000000000000, 0x8000000000000000}, // -0, Infinity
+    {0x8000000000000000, 0xfff0000000000000, 0xc00921fb54442d18}, // -0, -Infinity
+    {0x8000000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // -0, NaN
+    {0x0000000000000001, 0x0000000000000000, 0x3ff921fb54442d18}, // 5e-324, 0
+    {0x0000000000000001, 0x8000000000000000, 0x3ff921fb54442d18}, // 5e-324, -0
+    {0x0000000000000001, 0x0000000000000001, 0x3fe921fb54442d18}, // 5e-324, 5e-324
+    {0x0000000000000001, 0x8000000000000001, 0x4002d97c7f3321d2}, // 5e-324, -5e-324
+    {0x0000000000000001, 0x01a56e1fc2f8f359, 0x3b17e43c8800759b}, // 5e-324, 1e-300
+    {0x0000000000000001, 0x3ff0000000000000, 0x0000000000000001}, // 5e-324, 1
+    {0x0000000000000001, 0xbff0000000000000, 0x400921fb54442d18}, // 5e-324, -1
+    {0x0000000000000001, 0x4000000000000000, 0x0000000000000000}, // 5e-324, 2
+    {0x0000000000000001, 0x3fe0000000000000, 0x0000000000000002}, // 5e-324, 0.5
+    {0x0000000000000001, 0x7e37e43c8800759c, 0x0000000000000000}, // 5e-324, 1e+300
+    {0x0000000000000001, 0x7ff0000000000000, 0x0000000000000000}, // 5e-324, Infinity
+    {0x0000000000000001, 0xfff0000000000000, 0x400921fb54442d18}, // 5e-324, -Infinity
+    {0x0000000000000001, 0x7ff8000000000000, 0x7ff8000000000000}, // 5e-324, NaN
+    {0x8000000000000001, 0x0000000000000000, 0xbff921fb54442d18}, // -5e-324, 0
+    {0x8000000000000001, 0x8000000000000000, 0xbff921fb54442d18}, // -5e-324, -0
+    {0x8000000000000001, 0x0000000000000001, 0xbfe921fb54442d18}, // -5e-324, 5e-324
+    {0x8000000000000001, 0x8000000000000001, 0xc002d97c7f3321d2}, // -5e-324, -5e-324
+    {0x8000000000000001, 0x01a56e1fc2f8f359, 0xbb17e43c8800759b}, // -5e-324, 1e-300
+    {0x8000000000000001, 0x3ff0000000000000, 0x8000000000000001}, // -5e-324, 1
+    {0x8000000000000001, 0xbff0000000000000, 0xc00921fb54442d18}, // -5e-324, -1
+    {0x8000000000000001, 0x4000000000000000, 0x8000000000000000}, // -5e-324, 2
+    {0x8000000000000001, 0x3fe0000000000000, 0x8000000000000002}, // -5e-324, 0.5
+    {0x8000000000000001, 0x7e37e43c8800759c, 0x8000000000000000}, // -5e-324, 1e+300
+    {0x8000000000000001, 0x7ff0000000000000, 0x8000000000000000}, // -5e-324, Infinity
+    {0x8000000000000001, 0xfff0000000000000, 0xc00921fb54442d18}, // -5e-324, -Infinity
+    {0x8000000000000001, 0x7ff8000000000000, 0x7ff8000000000000}, // -5e-324, NaN
+    {0x01a56e1fc2f8f359, 0x0000000000000000, 0x3ff921fb54442d18}, // 1e-300, 0
+    {0x01a56e1fc2f8f359, 0x8000000000000000, 0x3ff921fb54442d18}, // 1e-300, -0
+    {0x01a56e1fc2f8f359, 0x0000000000000001, 0x3ff921fb54442d18}, // 1e-300, 5e-324
+    {0x01a56e1fc2f8f359, 0x8000000000000001, 0x3ff921fb54442d19}, // 1e-300, -5e-324
+    {0x01a56e1fc2f8f359, 0x01a56e1fc2f8f359, 0x3fe921fb54442d18}, // 1e-300, 1e-300
+    {0x01a56e1fc2f8f359, 0x3ff0000000000000, 0x01a56e1fc2f8f359}, // 1e-300, 1
+    {0x01a56e1fc2f8f359, 0xbff0000000000000, 0x400921fb54442d18}, // 1e-300, -1
+    {0x01a56e1fc2f8f359, 0x4000000000000000, 0x01956e1fc2f8f359}, // 1e-300, 2
+    {0x01a56e1fc2f8f359, 0x3fe0000000000000, 0x01b56e1fc2f8f359}, // 1e-300, 0.5
+    {0x01a56e1fc2f8f359, 0x7e37e43c8800759c, 0x0000000000000000}, // 1e-300, 1e+300
+    {0x01a56e1fc2f8f359, 0x7ff0000000000000, 0x0000000000000000}, // 1e-300, Infinity
+    {0x01a56e1fc2f8f359, 0xfff0000000000000, 0x400921fb54442d18}, // 1e-300, -Infinity
+    {0x01a56e1fc2f8f359, 0x7ff8000000000000, 0x7ff8000000000000}, // 1e-300, NaN
+    {0x3ff0000000000000, 0x0000000000000000, 0x3ff921fb54442d18}, // 1, 0
+    {0x3ff0000000000000, 0x8000000000000000, 0x3ff921fb54442d18}, // 1, -0
+    {0x3ff0000000000000, 0x0000000000000001, 0x3ff921fb54442d18}, // 1, 5e-324
+    {0x3ff0000000000000, 0x8000000000000001, 0x3ff921fb54442d18}, // 1, -5e-324
+    {0x3ff0000000000000, 0x01a56e1fc2f8f359, 0x3ff921fb54442d18}, // 1, 1e-300
+    {0x3ff0000000000000, 0x3ff0000000000000, 0x3fe921fb54442d18}, // 1, 1
+    {0x3ff0000000000000, 0xbff0000000000000, 0x4002d97c7f3321d2}, // 1, -1
+    {0x3ff0000000000000, 0x4000000000000000, 0x3fddac670561bb4f}, // 1, 2
+    {0x3ff0000000000000, 0x3fe0000000000000, 0x3ff1b6e192ebbe44}, // 1, 0.5
+    {0x3ff0000000000000, 0x7e37e43c8800759c, 0x01a56e1fc2f8f359}, // 1, 1e+300
+    {0x3ff0000000000000, 0x7ff0000000000000, 0x0000000000000000}, // 1, Infinity
+    {0x3ff0000000000000, 0xfff0000000000000, 0x400921fb54442d18}, // 1, -Infinity
+    {0x3ff0000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // 1, NaN
+    {0xbff0000000000000, 0x0000000000000000, 0xbff921fb54442d18}, // -1, 0
+    {0xbff0000000000000, 0x8000000000000000, 0xbff921fb54442d18}, // -1, -0
+    {0xbff0000000000000, 0x0000000000000001, 0xbff921fb54442d18}, // -1, 5e-324
+    {0xbff0000000000000, 0x8000000000000001, 0xbff921fb54442d18}, // -1, -5e-324
+    {0xbff0000000000000, 0x01a56e1fc2f8f359, 0xbff921fb54442d18}, // -1, 1e-300
+    {0xbff0000000000000, 0x3ff0000000000000, 0xbfe921fb54442d18}, // -1, 1
+    {0xbff0000000000000, 0xbff0000000000000, 0xc002d97c7f3321d2}, // -1, -1
+    {0xbff0000000000000, 0x4000000000000000, 0xbfddac670561bb4f}, // -1, 2
+    {0xbff0000000000000, 0x3fe0000000000000, 0xbff1b6e192ebbe44}, // -1, 0.5
+    {0xbff0000000000000, 0x7e37e43c8800759c, 0x81a56e1fc2f8f359}, // -1, 1e+300
+    {0xbff0000000000000, 0x7ff0000000000000, 0x8000000000000000}, // -1, Infinity
+    {0xbff0000000000000, 0xfff0000000000000, 0xc00921fb54442d18}, // -1, -Infinity
+    {0xbff0000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // -1, NaN
+    {0x4000000000000000, 0x0000000000000000, 0x3ff921fb54442d18}, // 2, 0
+    {0x4000000000000000, 0x8000000000000000, 0x3ff921fb54442d18}, // 2, -0
+    {0x4000000000000000, 0x0000000000000001, 0x3ff921fb54442d18}, // 2, 5e-324
+    {0x4000000000000000, 0x8000000000000001, 0x3ff921fb54442d18}, // 2, -5e-324
+    {0x4000000000000000, 0x01a56e1fc2f8f359, 0x3ff921fb54442d18}, // 2, 1e-300
+    {0x4000000000000000, 0x3ff0000000000000, 0x3ff1b6e192ebbe44}, // 2, 1
+    {0x4000000000000000, 0xbff0000000000000, 0x4000468a8ace4df6}, // 2, -1
+    {0x4000000000000000, 0x4000000000000000, 0x3fe921fb54442d18}, // 2, 2
+    {0x4000000000000000, 0x3fe0000000000000, 0x3ff5368c951e9cfd}, // 2, 0.5
+    {0x4000000000000000, 0x7e37e43c8800759c, 0x01b56e1fc2f8f359}, // 2, 1e+300
+    {0x4000000000000000, 0x7ff0000000000000, 0x0000000000000000}, // 2, Infinity
+    {0x4000000000000000, 0xfff0000000000000, 0x400921fb54442d18}, // 2, -Infinity
+    {0x4000000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // 2, NaN
+    {0x3fe0000000000000, 0x0000000000000000, 0x3ff921fb54442d18}, // 0.5, 0
+    {0x3fe0000000000000, 0x8000000000000000, 0x3ff921fb54442d18}, // 0.5, -0
+    {0x3fe0000000000000, 0x0000000000000001, 0x3ff921fb54442d18}, // 0.5, 5e-324
+    {0x3fe0000000000000, 0x8000000000000001, 0x3ff921fb54442d18}, // 0.5, -5e-324
+    {0x3fe0000000000000, 0x01a56e1fc2f8f359, 0x3ff921fb54442d18}, // 0.5, 1e-300
+    {0x3fe0000000000000, 0x3ff0000000000000, 0x3fddac670561bb4f}, // 0.5, 1
+    {0x3fe0000000000000, 0xbff0000000000000, 0x40056c6e7397f5ae}, // 0.5, -1
+    {0x3fe0000000000000, 0x4000000000000000, 0x3fcf5b75f92c80dd}, // 0.5, 2
+    {0x3fe0000000000000, 0x3fe0000000000000, 0x3fe921fb54442d18}, // 0.5, 0.5
+    {0x3fe0000000000000, 0x7e37e43c8800759c, 0x01956e1fc2f8f359}, // 0.5, 1e+300
+    {0x3fe0000000000000, 0x7ff0000000000000, 0x0000000000000000}, // 0.5, Infinity
+    {0x3fe0000000000000, 0xfff0000000000000, 0x400921fb54442d18}, // 0.5, -Infinity
+    {0x3fe0000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // 0.5, NaN
+    {0x7e37e43c8800759c, 0x0000000000000000, 0x3ff921fb54442d18}, // 1e+300, 0
+    {0x7e37e43c8800759c, 0x8000000000000000, 0x3ff921fb54442d18}, // 1e+300, -0
+    {0x7e37e43c8800759c, 0x0000000000000001, 0x3ff921fb54442d18}, // 1e+300, 5e-324
+    {0x7e37e43c8800759c, 0x8000000000000001, 0x3ff921fb54442d18}, // 1e+300, -5e-324
+    {0x7e37e43c8800759c, 0x01a56e1fc2f8f359, 0x3ff921fb54442d18}, // 1e+300, 1e-300
+    {0x7e37e43c8800759c, 0x3ff0000000000000, 0x3ff921fb54442d18}, // 1e+300, 1
+    {0x7e37e43c8800759c, 0xbff0000000000000, 0x3ff921fb54442d18}, // 1e+300, -1
+    {0x7e37e43c8800759c, 0x4000000000000000, 0x3ff921fb54442d18}, // 1e+300, 2
+    {0x7e37e43c8800759c, 0x3fe0000000000000, 0x3ff921fb54442d18}, // 1e+300, 0.5
+    {0x7e37e43c8800759c, 0x7e37e43c8800759c, 0x3fe921fb54442d18}, // 1e+300, 1e+300
+    {0x7e37e43c8800759c, 0x7ff0000000000000, 0x0000000000000000}, // 1e+300, Infinity
+    {0x7e37e43c8800759c, 0xfff0000000000000, 0x400921fb54442d18}, // 1e+300, -Infinity
+    {0x7e37e43c8800759c, 0x7ff8000000000000, 0x7ff8000000000000}, // 1e+300, NaN
+    {0x7ff0000000000000, 0x0000000000000000, 0x3ff921fb54442d18}, // Infinity, 0
+    {0x7ff0000000000000, 0x8000000000000000, 0x3ff921fb54442d18}, // Infinity, -0
+    {0x7ff0000000000000, 0x0000000000000001, 0x3ff921fb54442d18}, // Infinity, 5e-324
+    {0x7ff0000000000000, 0x8000000000000001, 0x3ff921fb54442d18}, // Infinity, -5e-324
+    {0x7ff0000000000000, 0x01a56e1fc2f8f359, 0x3ff921fb54442d18}, // Infinity, 1e-300
+    {0x7ff0000000000000, 0x3ff0000000000000, 0x3ff921fb54442d18}, // Infinity, 1
+    {0x7ff0000000000000, 0xbff0000000000000, 0x3ff921fb54442d18}, // Infinity, -1
+    {0x7ff0000000000000, 0x4000000000000000, 0x3ff921fb54442d18}, // Infinity, 2
+    {0x7ff0000000000000, 0x3fe0000000000000, 0x3ff921fb54442d18}, // Infinity, 0.5
+    {0x7ff0000000000000, 0x7e37e43c8800759c, 0x3ff921fb54442d18}, // Infinity, 1e+300
+    {0x7ff0000000000000, 0x7ff0000000000000, 0x3fe921fb54442d18}, // Infinity, Infinity
+    {0x7ff0000000000000, 0xfff0000000000000, 0x4002d97c7f3321d2}, // Infinity, -Infinity
+    {0x7ff0000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // Infinity, NaN
+    {0xfff0000000000000, 0x0000000000000000, 0xbff921fb54442d18}, // -Infinity, 0
+    {0xfff0000000000000, 0x8000000000000000, 0xbff921fb54442d18}, // -Infinity, -0
+    {0xfff0000000000000, 0x0000000000000001, 0xbff921fb54442d18}, // -Infinity, 5e-324
+    {0xfff0000000000000, 0x8000000000000001, 0xbff921fb54442d18}, // -Infinity, -5e-324
+    {0xfff0000000000000, 0x01a56e1fc2f8f359, 0xbff921fb54442d18}, // -Infinity, 1e-300
+    {0xfff0000000000000, 0x3ff0000000000000, 0xbff921fb54442d18}, // -Infinity, 1
+    {0xfff0000000000000, 0xbff0000000000000, 0xbff921fb54442d18}, // -Infinity, -1
+    {0xfff0000000000000, 0x4000000000000000, 0xbff921fb54442d18}, // -Infinity, 2
+    {0xfff0000000000000, 0x3fe0000000000000, 0xbff921fb54442d18}, // -Infinity, 0.5
+    {0xfff0000000000000, 0x7e37e43c8800759c, 0xbff921fb54442d18}, // -Infinity, 1e+300
+    {0xfff0000000000000, 0x7ff0000000000000, 0xbfe921fb54442d18}, // -Infinity, Infinity
+    {0xfff0000000000000, 0xfff0000000000000, 0xc002d97c7f3321d2}, // -Infinity, -Infinity
+    {0xfff0000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // -Infinity, NaN
+    {0x7ff8000000000000, 0x0000000000000000, 0x7ff8000000000000}, // NaN, 0
+    {0x7ff8000000000000, 0x8000000000000000, 0x7ff8000000000000}, // NaN, -0
+    {0x7ff8000000000000, 0x0000000000000001, 0x7ff8000000000000}, // NaN, 5e-324
+    {0x7ff8000000000000, 0x8000000000000001, 0x7ff8000000000000}, // NaN, -5e-324
+    {0x7ff8000000000000, 0x01a56e1fc2f8f359, 0x7ff8000000000000}, // NaN, 1e-300
+    {0x7ff8000000000000, 0x3ff0000000000000, 0x7ff8000000000000}, // NaN, 1
+    {0x7ff8000000000000, 0xbff0000000000000, 0x7ff8000000000000}, // NaN, -1
+    {0x7ff8000000000000, 0x4000000000000000, 0x7ff8000000000000}, // NaN, 2
+    {0x7ff8000000000000, 0x3fe0000000000000, 0x7ff8000000000000}, // NaN, 0.5
+    {0x7ff8000000000000, 0x7e37e43c8800759c, 0x7ff8000000000000}, // NaN, 1e+300
+    {0x7ff8000000000000, 0x7ff0000000000000, 0x7ff8000000000000}, // NaN, Infinity
+    {0x7ff8000000000000, 0xfff0000000000000, 0x7ff8000000000000}, // NaN, -Infinity
+    {0x7ff8000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // NaN, NaN
+};
+
+// Node 24 Math.atan and Math.tan: {x, atan(x), tan(x)}.
+constexpr Expected V8AtanTan[] = {
+    {0x0000000000000000, 0x0000000000000000, 0x0000000000000000}, // 0
+    {0x8000000000000000, 0x8000000000000000, 0x8000000000000000}, // -0
+    {0x0000000000000001, 0x0000000000000001, 0x0000000000000001}, // 5e-324
+    {0x3e20000000000000, 0x3e20000000000000, 0x3e20000000000000}, // 1.862645149230957e-9
+    {0x3e30000000000000, 0x3e30000000000000, 0x3e30000000000000}, // 3.725290298461914e-9
+    {0x3fdc000000000000, 0x3fda64eec3cc23fd, 0x3fddef49eaab37a1}, // 0.4375
+    {0x3fe6000000000000, 0x3fe345f01cce37bb, 0x3fea46cb2be6a0b2}, // 0.6875
+    {0x3fe594af4f0d844d, 0x3fe2fc9ea07b6fb2, 0x3fe995054ea00c37}, // 0.6744
+    {0x3ff0000000000000, 0x3fe921fb54442d18, 0x3ff8eb245cbee3a6}, // 1
+    {0x3ff3000000000000, 0x3febde70ed439fe7, 0x4003d6dc956eac7d}, // 1.1875
+    {0x4003800000000000, 0x3ff2e75728833a54, 0xbfeb2d89a938294c}, // 2.4375
+    {0x4008000000000000, 0x3ff3fc176b7a8560, 0xbfc23ef71254b86f}, // 3
+    {0x4202a05f20000000, 0x3ff921fb543d4de0, 0xbfe1de000f443f50}, // 10000000000
+    {0x4410000000000000, 0x3ff921fb54442d18, 0xbfb83d39fb22bdd2}, // 73786976294838210000
+    {0x7e37e43c8800759c, 0x3ff921fb54442d18, 0x3ff6be411f37ac77}, // 1e+300
+    {0xbff0000000000000, 0xbfe921fb54442d18, 0xbff8eb245cbee3a6}, // -1
+    {0xbfe0000000000000, 0xbfddac670561bb4f, 0xbfe17b4f5bf3474a}, // -0.5
+    {0x3ff921fb54442d18, 0x3ff00fe987ed02ff, 0x434d02967c31cdb5}, // 1.5707963267948966
+    {0x400921fb54442d18, 0x3ff433b8a322ddd2, 0xbca1a62633145c07}, // 3.141592653589793
+    {0x4480f0cf064dd592, 0x3ff921fb54442d18, 0xbffa0f79c1b6b258}, // 1e+22
+    {0x7ff0000000000000, 0x3ff921fb54442d18, 0x7ff8000000000000}, // Infinity
+    {0xfff0000000000000, 0xbff921fb54442d18, 0x7ff8000000000000}, // -Infinity
+    {0x7ff8000000000000, 0x7ff8000000000000, 0x7ff8000000000000}, // NaN
+};
+
+} // namespace
+
+static_assert(bitsOf(det::atan(1.0)) == 0x3fe921fb54442d18ULL);
+static_assert(bitsOf(det::atan2(1.0, -1.0)) == 0x4002d97c7f3321d2ULL);
+static_assert(noexcept(det::atan2(1.0, 1.0)) && noexcept(det::atan(1.0f)) && noexcept(det::tan(1.0f)));
+
+TEST_CASE("det atan2 equals V8 on every pair of edge values (zeros, subnormals, infinities, NaN)")
+{
+    for (const Expected& e : V8Atan2)
+    {
+        const double y = std::bit_cast<double>(e.x);
+        const double x = std::bit_cast<double>(e.sin);
+        CAPTURE(y);
+        CAPTURE(x);
+        CHECK(canonical(det::atan2(y, x)) == e.cos);
+    }
+}
+
+TEST_CASE("det atan and tan equal V8 on pinned values")
+{
+    for (const Expected& e : V8AtanTan)
+    {
+        const double x = std::bit_cast<double>(e.x);
+        CAPTURE(x);
+        CHECK(canonical(det::atan(x)) == e.sin);
+        CHECK(canonical(det::tan(x)) == e.cos);
+    }
+}
+
+TEST_CASE("det atan, atan2 and tan are bit-identical to V8 over generated inputs")
+{
+    std::uint64_t ht = 0xCBF29CE484222325ULL;
+    std::uint64_t ha = 0xCBF29CE484222325ULL;
+    std::uint64_t h2 = 0xCBF29CE484222325ULL;
+    for (std::uint64_t i = 0; i < TanCount; ++i)
+    {
+        ht = fnv(ht, canonical(det::tan(tanInput(i))));
+    }
+    for (std::uint64_t i = 0; i < AtanCount; ++i)
+    {
+        ha = fnv(ha, canonical(det::atan(atanInput(i))));
+    }
+    for (std::uint64_t i = 0; i < Atan2Count; ++i)
+    {
+        const Atan2Input in = atan2Input(i);
+        h2 = fnv(h2, canonical(det::atan2(in.y, in.x)));
+    }
+    CHECK(ht == V8TanDigest);
+    CHECK(ha == V8AtanDigest);
+    CHECK(h2 == V8Atan2Digest);
+}
+
+TEST_CASE("det atan2 quadrants, symmetry and float overloads")
+{
+    CHECK(det::atan2(1.0, 1.0) == doctest::Approx(0.78539816339744830962).epsilon(1e-15));
+    CHECK(det::atan2(1.0, -1.0) == doctest::Approx(2.35619449019234492885).epsilon(1e-15));
+    CHECK(det::atan2(-1.0, -1.0) == doctest::Approx(-2.35619449019234492885).epsilon(1e-15));
+    CHECK(det::atan2(-1.0, 1.0) == doctest::Approx(-0.78539816339744830962).epsilon(1e-15));
+    CHECK(std::signbit(det::atan2(-0.0, 1.0)));
+    CHECK(det::atan2(0.0, -0.0) > 3.14);
+    CHECK(det::atan2(-0.0, -0.0) < -3.14);
+    CHECK(std::isnan(det::atan2(std::numeric_limits<double>::quiet_NaN(), 1.0)));
+    for (std::uint64_t i = 0; i < 2000; ++i)
+    {
+        const Atan2Input in = atan2Input(i);
+        if (std::isnan(in.x) || std::isnan(in.y))
+        {
+            continue;
+        }
+        CHECK(bitsOf(det::atan2(-in.y, in.x)) == (bitsOf(det::atan2(in.y, in.x)) ^ (1ULL << 63)));
+        CHECK(bitsOf(det::atan(-in.x)) == (bitsOf(det::atan(in.x)) ^ (1ULL << 63)));
+    }
+    CHECK(det::atan(1.0f) == static_cast<float>(det::atan(1.0)));
+    CHECK(det::atan2(1.0f, -2.0f) == static_cast<float>(det::atan2(1.0, -2.0)));
+    CHECK(det::tan(0.5f) == static_cast<float>(det::tan(0.5)));
+}
+
+TEST_CASE("det atan, atan2 and tan stay under one ulp of a long-double reference")
+{
+    if constexpr (std::numeric_limits<long double>::digits > 53)
+    {
+        double worstAtan = 0;
+        double worstAtan2 = 0;
+        double worstTan = 0;
+        for (std::uint64_t i = 0; i < AtanCount; ++i)
+        {
+            const double x = atanInput(i);
+            if (std::isfinite(x) && std::fabs(x) > 1e-300)
+            {
+                worstAtan = std::max(worstAtan, ulpError(det::atan(x), std::atan(static_cast<long double>(x))));
+            }
+        }
+        for (std::uint64_t i = 0; i < Atan2Count; ++i)
+        {
+            const Atan2Input in = atan2Input(i);
+            const long double ref = std::atan2(static_cast<long double>(in.y), static_cast<long double>(in.x));
+            if (std::isfinite(in.x) && std::isfinite(in.y) && std::fabs(ref) > 1e-300L)
+            {
+                worstAtan2 = std::max(worstAtan2, ulpError(det::atan2(in.y, in.x), ref));
+            }
+        }
+        for (std::uint64_t i = 0; i < TanCount; i += 4)
+        {
+            const double x = tanInput(i);
+            if (std::fabs(x) <= 4.0 && std::fabs(x) > 1e-300) // the reference reduction is trustworthy only here
+            {
+                worstTan = std::max(worstTan, ulpError(det::tan(x), std::tan(static_cast<long double>(x))));
+            }
+        }
+        MESSAGE("max error (ulp): atan ", worstAtan, ", atan2 ", worstAtan2, ", tan ", worstTan);
+        CHECK(worstAtan < 1.0);
+        CHECK(worstAtan2 < 2.0); // fdlibm atan2 adds two roundings near the axes
+        CHECK(worstTan < 1.0);
+    }
+}
