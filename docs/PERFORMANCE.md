@@ -60,8 +60,8 @@ cmake --build --preset default --target Sub0Math_Bench_baseline   # record this 
 ```
 
 **Implicit after every rebuild.** A benchmark executable relinks only when its code, or a header it
-uses, has changed. When it does, a quick check runs straight after the build (3 rounds at the
-same epochs as baselines, so absolute times compare like for like; about 35 s here) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUILD` controls this:
+uses, has changed. When it does, a quick-level check runs straight after the build (3 rounds at the
+same epochs as baselines, so absolute times compare like for like, within the quick time budget; see [Levels](#levels-time-budget-and-coverage)) and prints regressions and progressions. `SUB0MATH_PERF_ON_BUILD` controls this:
 
 | Value | Effect |
 |---|---|
@@ -88,6 +88,104 @@ same epochs as baselines, so absolute times compare like for like; about 35 s he
 `_baseline` and say why in the commit), ok, NOISY, new and missing, for benchmarks and for pair ratios
 (pair tolerance 5%).
 
+### Levels, time budget and coverage
+
+The rigour added in October 2026 (at least 10 measured samples before a bimodal benchmark can block, kept
+binaries, side-by-side reproduction, confirmation passes) made one pre-push gate of the whole Sub0Math
+suite take more than 10 minutes, and that cost landed on every everyday push. So the gates have two levels:
+**quick** for everyday work, **full** for milestones. Quick gives a baseline of coverage in a target time;
+full is the complete method, unchanged.
+
+| | `quick` (default) | `full` |
+|---|---|---|
+| Used by | pre-push gate, after-build check | milestone pushes, or on request |
+| Benchmarks | every pair group (library benchmark plus its hand-written reference) and the environment controls, always; the others rotate | all |
+| Rounds | 3, the least that gives a median and a spread | the gate's default (3), plus extra rounds wherever the rules below ask for them |
+| Time | a budget, **90 s** by default | none, unless one is given |
+| Bimodal-known benchmarks | measured to 10 samples only when a verdict depends on it (a regression to confirm, an inconclusive result to retry) | measured to 10 samples from the start |
+| Confirmation of a regression | always, even if it overruns the budget (the overrun is reported) | always |
+| Inconclusive retry | only if it fits the remaining budget | always |
+| Side-by-side reproduction against the kept binary | only for a regression against a local record, as in full | the same |
+| Records and kept binaries | kept (a record of a quick run holds the benchmarks it measured) | kept |
+
+Quick never weakens what a confirmed regression means: a regression against the committed baseline, or one
+that reproduces side by side against the previous record, blocks at either level, and is confirmed with the
+same extra rounds (at least 10 measured samples of what is re-measured). What quick gives up is **coverage
+per push**: a benchmark that was not measured this push, or stayed inconclusive, cannot block it.
+
+**Which level runs** (the first that applies, reported with its reason on the first line of the gate output):
+
+1. `--level quick|full` on the command line;
+2. the environment variable `SUB0MATH_PERF_LEVEL=quick|full`;
+3. the pushed refs: a push that includes a **tag** whose name matches one of the full-ref patterns runs
+   full. Defaults `v*` and `milestone/*` (so `v1.2.0`, `milestone/M2`); change them with the CMake list
+   `SUB0MATH_PERF_FULL_REFS` or `bench_check.py install-hooks --full-refs "rel-*,v*"` (stored as `full_refs`
+   in `.git/sub0perf/config.json`). Branch names and deletions never match;
+4. otherwise quick.
+
+**The budget** is `--budget SECONDS`, else `SUB0MATH_PERF_BUDGET`, else (quick only) the configured value,
+else 90. CMake sets the configured value with `SUB0MATH_PERF_QUICK_BUDGET` (stored as `quick_budget`; the
+after-build check gets it as `--budget`). `0` means no budget. Full has none unless one is given. It counts
+measuring time: the build before it does not count.
+
+**The planner** (`sub0perf/plan.py`) spends it like this:
+
+- Cost per sample comes from the timings of the last runs (`.git/sub0perf/coverage/<target>.json`: the
+  median wall time of each benchmark's process, which includes process start-up, and of a round's two
+  steady calibrations). With none yet, one calibration and one benchmark are timed as a cheap probe, and
+  that time stands in for every benchmark.
+- The always-measured set (every member of a group that has a hand-written reference, which also are the
+  controls) runs for 3 rounds. If that alone is estimated over the budget, it is measured anyway and the
+  overrun is stated; it is the minimum at which a verdict on a pair means something.
+- 25% of the budget is kept for confirmation and retry passes. The rest is filled with the other
+  benchmarks, **stalest first**: never measured, then longest since last measured (counted in gate runs);
+  ties are broken by a hash of the commit and the benchmark name, so a commit's choice is repeatable and
+  differs between commits. A benchmark too expensive for the space left is skipped and stays stalest.
+- After the plan is made the gate prints what it will do and the coverage it gives, for example
+  `plan: 18/30 benchmarks x 3 rounds, estimated 52 s of a 90 s budget`, `coverage: measured 18/30 now; all
+  covered within 2 push(es)`, `stalest after this push: <name> (never measured)`. When the rotating
+  benchmarks never fit (budget below the cost of one of them), it says so and suggests a larger budget or
+  the full level.
+- After the run it prints the measured time against the budget, and the overrun when there is one.
+  `.git/sub0perf/log.jsonl` has the level, benchmarks measured and seconds of every gate.
+
+A run that measured a subset judges against the same baseline: benchmarks it did not measure are not
+`missing`, only the measured ones get a verdict.
+
+**Milestone procedure.** Before declaring a milestone (a release, a design freeze, merging a long
+branch), run the full level and read its output:
+
+```bash
+SUB0MATH_PERF_LEVEL=full git push          # or: git push origin v1.2.0 / milestone/M3 (a matching tag selects full)
+python tools/perf/bench_check.py gate --level full      # by hand, without pushing
+```
+
+Baselines are (re)recorded only from **full-level, steady** runs: record them with the `_baseline` target
+or `bench_check.py baseline` from a `run` of the whole suite, never from a quick record. The calibration
+steadiness guard (refusal when the calibration varied by more than 1.25x) applies unchanged. A quick record
+contains only the benchmarks it measured, so `accept` of a benchmark it did not measure fails by design:
+measure it first (`run --filter ...`).
+
+**Quality gates (tests) have the same two levels.** A long test suite is labelled `full` (ctest label); the
+everyday run excludes it and milestones and CI run everything:
+
+```cmake
+include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
+sub0math_add_test(MyLib_Tests COMMAND MyLib_Tests)                 # quick: runs every day
+sub0math_add_test(MyLib_Soak FULL COMMAND MyLib_Soak --long)       # full: milestones and CI
+sub0math_label_full_tests(MyLib_Other)                             # label a test that already exists
+doctest_discover_tests(MyLib_Long ADD_LABELS 1 TEST_SUFFIX " [full]")  # discovery macros: use their own LABELS option
+gtest_discover_tests(MyLib_Long PROPERTIES LABELS full)
+```
+
+```bash
+ctest --preset quick     # or: ctest -C Release -LE full     everyday local runs
+ctest --preset full      # or: ctest -C Release              milestones, and CI (always everything)
+```
+
+`CMakePresets.json` has `quick` and `full` test presets (inheriting `default`; `quick` has
+`"filter": {"exclude": {"label": "full"}}`). CI keeps its existing presets, which run everything.
+
 ### Pre-push gate and explicit acceptance
 
 Configuring a repository that builds benchmarks installs two git hooks, unless on CI or
@@ -99,7 +197,7 @@ a hook prints a message and does nothing instead of failing.
 - **post-checkout** notes the commit. The first clean build afterwards keeps its measurement as that
   commit's record: `.git/sub0perf/records/<target>/<commit>.json`, local to the clone and never
   committed. So every commit measured on a clean tree has a record of where a branch started.
-- **pre-push** builds each benchmark target, measures HEAD (3 interleaved rounds, plus extra rounds
+- **pre-push** builds each benchmark target, measures HEAD at the selected level (see [Levels](#levels-time-budget-and-coverage); 3 interleaved rounds, plus extra rounds
   for noisy benchmarks) and keeps that as HEAD's record. It then compares against:
   - the committed baseline;
   - the record of the upstream commit, or of the nearest earlier commit with one, which is like for
@@ -199,6 +297,8 @@ package, lowest layer first:
 | `runner` | One process per benchmark, interleaved calibrated rounds, `extend_rounds`, `measure_all`, `rerunner` |
 | `judge` | Verdicts for benchmarks, pairs and counters, environment controls, method mismatch; `evaluate`, `verdict_hits` |
 | `confirm` | Confirming regressions, retrying inconclusive results |
+| `levels` | Which level (quick or full) and budget a run has: `--level`, `SUB0MATH_PERF_LEVEL`, pushed milestone tags |
+| `plan` | The quick-level planner: pairs and controls always, rotation by staleness, coverage state, the time `Budget` |
 | `reproduce` | Measuring an earlier record's kept build beside the new one to reproduce a difference from the record |
 | `pins` | Dependency pins: parsing, reading the sha, checking it is on the dependency's remote |
 | `report` | The markdown tables and job summary |
