@@ -5,6 +5,7 @@ import random
 import statistics
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from . import platform_proc
@@ -62,7 +63,9 @@ def steady_calibration(read):
 
 
 def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0, samples=None, meta=None, positions=None,
-               counters=None):
+               counters=None, timings=None):
+    """Interleaved rounds. `timings`, when given ({"bench": {name: [seconds]}, "overhead": [seconds]}), collects the wall time of
+    each benchmark's process and of each round's two calibrations, which is what planning a budget needs."""
     samples = samples if samples is not None else {n: [] for n in names}
     counters = counters if counters is not None else {}
     positions = positions if positions is not None else {n: [] for n in names}
@@ -75,7 +78,9 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
         for r in range(first_round, first_round + rounds):
             rng = random.Random(seed * 1000003 + r)
             load, waited, quiet = wait_for_quiet(max_load, settle)
+            began = time.monotonic()
             cal_start = steady_calibration(lambda: measure(exe, ["--calibration", *extra], scratch)[CALIBRATION])
+            overhead = time.monotonic() - began
             order = list(groups)
             rng.shuffle(order)
             sequence = []
@@ -84,13 +89,19 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
                 rng.shuffle(members)
                 sequence += members
             for k, n in enumerate(sequence):
+                began = time.monotonic()
                 ns, found = measure_full(exe, ["--exact", n, *extra], scratch)[n]
+                if timings is not None:
+                    timings["bench"].setdefault(n, []).append(time.monotonic() - began)
                 samples.setdefault(n, []).append(ns)
                 for key, value in found.items():
                     counters.setdefault(n, {}).setdefault(key, []).append(value)
                 # Where in the round it ran (0 = start, 1 = end), to interpolate the clock between calibrations.
                 positions.setdefault(n, []).append(round((k + 0.5) / len(sequence), 4))
+            began = time.monotonic()
             cal_end = steady_calibration(lambda: measure(exe, ["--calibration", *extra], scratch)[CALIBRATION])
+            if timings is not None:
+                timings["overhead"].append(overhead + time.monotonic() - began)
             meta.append({"round": r, "load": round(load, 4), "waited_s": round(waited, 1), "quiet": quiet,
                          "calibration_start_ns": cal_start, "calibration_end_ns": cal_end})
             print(f"round {r + 1}: load {load:.0%}{'' if quiet else ' (busy)'}, calibration {cal_start:,.0f}/{cal_end:,.0f} ns,"
@@ -117,14 +128,34 @@ def extend_rounds(run, names, rounds, samples, meta, positions, counters):
         fill_unmeasured(samples, positions, before)
 
 
-def measure_all(exe, args):
-    """A full run of every benchmark with the measuring options of parsed command-line `args`: (samples, meta, positions, counters)."""
-    return run_rounds(exe, list_names(exe, args.filter), args.rounds, args.epochs, args.max_load, args.settle, args.seed)
+def measure_all(exe, args, names=None, rounds=None, timings=None):
+    """A run with the measuring options of parsed command-line `args`: (samples, meta, positions, counters).
+
+    Every benchmark (those matching --filter), or just `names` when a plan chose them; `rounds` overrides args.rounds.
+    """
+    return run_rounds(exe, names if names is not None else list_names(exe, args.filter), rounds or args.rounds, args.epochs,
+                      args.max_load, args.settle, args.seed, timings=timings)
 
 
-def rerunner(exe, args, samples, meta, positions, counters):
+def probe_cost(exe, name, args):
+    """A cheap probe when no timings are known: the wall seconds of one benchmark process and of one calibration.
+
+    Returns (seconds per benchmark sample, seconds of a round's calibrations).
+    """
+    extra = ["--epochs", str(args.epochs)] if args.epochs else []
+    with tempfile.TemporaryDirectory() as scratch:
+        began = time.monotonic()
+        measure(exe, ["--calibration", *extra], scratch)
+        calibration = time.monotonic() - began
+        began = time.monotonic()
+        measure(exe, ["--exact", name, *extra], scratch)
+        return time.monotonic() - began, 2 * calibration
+
+
+def rerunner(exe, args, samples, meta, positions, counters, timings=None):
     """`rerun(names, rounds)` that adds rounds for just `names` to these samples (see extend_rounds)."""
     def rerun(names, rounds):
         extend_rounds(lambda ns, r, first, *rest: run_rounds(exe, ns, r, args.epochs, args.max_load, args.settle, args.seed, first,
-                                                              *rest), names, rounds, samples, meta, positions, counters)
+                                                              *rest, timings=timings), names, rounds, samples, meta, positions,
+                      counters)
     return rerun

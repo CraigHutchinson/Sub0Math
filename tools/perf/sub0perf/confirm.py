@@ -81,15 +81,21 @@ def inconclusive_in(evaluations):
     return names, (whole_groups(remeasure, evaluations) if remeasure else set())
 
 
-def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds, more_for=None):
+def retry_inconclusive(evaluate_all, remeasure_rounds, extra_rounds, more_for=None, affordable=None):
     """When anything is inconclusive, re-measures its groups once with `extra_rounds` more rounds.
 
-    Returns (inconclusive before, inconclusive after). What is still inconclusive is the caller's to report.
+    `affordable(names, rounds)`, when given, says whether the retry fits the time budget (a quick gate); if not, it is skipped,
+    since an inconclusive result never blocks. Returns (inconclusive before, inconclusive after). What is still inconclusive
+    is the caller's to report.
     """
     first, remeasure = inconclusive_in(evaluate_all())
     if not first or not remeasure or extra_rounds <= 0:
         return first, first
     extra_rounds = max(extra_rounds, more_for(remeasure) if more_for else 0)
+    if affordable is not None and not affordable(remeasure, extra_rounds):
+        print(f"sub0perf: {len(first)} inconclusive result(s) ({', '.join(sorted(first))}); not re-measured: "
+              f"{extra_rounds} more round(s) of {len(remeasure)} benchmark(s) do not fit the remaining time budget", flush=True)
+        return first, first
     print(f"sub0perf: {len(first)} inconclusive result(s) ({', '.join(sorted(first))});"
           f" re-measuring {len(remeasure)} benchmark(s) once with {extra_rounds} more round(s)", flush=True)
     remeasure_rounds(remeasure, extra_rounds)

@@ -199,9 +199,14 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
     return rows, pair_rows, env
 
 
+def is_subset(args):
+    """True when the run measured a chosen subset (--filter, or a quick plan), so the rest of a baseline is not "missing"."""
+    return bool(getattr(args, "filter", "")) or bool(getattr(args, "subset", False))
+
+
 def evaluate_with(record, baseline, args, filtered=False):
     """evaluate() with the judging options of parsed command-line `args`."""
-    return evaluate(record, baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute, filtered,
+    return evaluate(record, baseline, args.tolerance, args.pair_tolerance, args.max_cv, args.absolute, filtered or is_subset(args),
                     args.instr_tolerance)
 
 

@@ -87,7 +87,7 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
 
 
 def report(record, args):
-    rows, pair_rows, env = evaluate_with(record, args.baseline, args, bool(getattr(args, "filter", "")))
+    rows, pair_rows, env = evaluate_with(record, args.baseline, args)
     text = render(rows, pair_rows, env, args.baseline, args.tolerance, args.pair_tolerance)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

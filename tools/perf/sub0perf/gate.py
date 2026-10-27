@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .baseline import baseline_data, make_record
+from . import levels, plan as planning
 from .common import group_of, read_json, tooling_script
 from .confirm import confirm_regressions, inconclusive_in, retry_inconclusive
 from .gitstate import (ZERO_SHA_CHARS, accepted_since, changed_paths_between, documentation_only, git, git_head, log_event,
@@ -15,7 +16,7 @@ from .lock import LockTimeout, PerfLock
 from .pins import pin_problems, show_file_at
 from .report import render, report
 from .reproduce import reproduced_against
-from .runner import measure_all, rerunner
+from .runner import list_names, measure_all, probe_cost, rerunner
 from .stats import rounds_needed
 
 
@@ -65,6 +66,13 @@ def gate_command(args):
     if config is None:
         print("sub0perf: no benchmarks configured for this repository; nothing to gate")
         return 0
+    try:
+        levels.resolve(args, refs, config)
+    except ValueError as error:
+        print(f"sub0perf: {error}; push blocked")
+        return 1
+    print(f"sub0perf: level {args.level} ({args.level_why}); "
+          f"{'budget ' + format(args.budget_seconds, 'g') + ' s (' + args.budget_why + ')' if args.budget_seconds else 'no time budget'}")
     head = git_head(repo)
     clean = tree_clean(repo)
     if args.refs_from_stdin:  # a push: what is measured must be what is pushed
@@ -92,6 +100,26 @@ def gate_command(args):
         return 1
 
 
+def choose_benchmarks(args, exe, target, state, head, all_names):
+    """(benchmarks to measure, rounds) for this level: everything at full, a plan that fits the time budget at quick."""
+    rounds = args.rounds
+    if args.level != levels.QUICK:
+        return all_names, rounds
+    if not args.budget_seconds:
+        print(f"sub0perf: quick level without a time budget: all {len(all_names)} benchmarks, {rounds} rounds")
+        return all_names, rounds
+    per_sample = None
+    if not state["costs"] and all_names:  # nothing timed yet: a cheap probe of one sample and one calibration
+        per_sample, overhead = probe_cost(exe, (planning.mandatory_names(all_names) or all_names)[0], args)
+        state["round_overhead"] = overhead
+        print(f"sub0perf: no timings of {target} yet; probe: {per_sample:.1f} s per sample, {overhead:.1f} s of calibration per round")
+    rounds = max(rounds, planning.QUICK_ROUNDS)
+    plan = planning.plan_quick(all_names, state, head, args.budget_seconds, rounds, default_cost=per_sample)
+    for line in planning.describe_plan(plan, len(all_names), state, head):
+        print(line)
+    return plan.selected, rounds
+
+
 def run_gate(args, repo, d, config_path, head, clean):
     config = read_json(config_path)
     upstream = git(repo, "rev-parse", "@{upstream}")
@@ -106,8 +134,17 @@ def run_gate(args, repo, d, config_path, head, clean):
             continue
         exe = t["exe"]
         args.filter = ""
-        samples, meta, positions, counters = measure_all(exe, args)
+        quick = args.level == levels.QUICK
+        state = planning.load_state(d, target)
+        timings = planning.new_timings()
+        all_names = list_names(exe, "")
+        chosen, rounds = choose_benchmarks(args, exe, target, state, head, all_names)
+        args.subset = len(chosen) < len(all_names)
+        budget = planning.Budget(args.budget_seconds)  # measuring time; the build above does not count
+        samples, meta, positions, counters = measure_all(exe, args, names=chosen, rounds=rounds, timings=timings)
         record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed)
+        record["level"] = args.level
+        record["unmeasured"] = sorted(set(all_names) - set(chosen))
         args.baseline = t["baseline"]
         ref_sha, ref = reference_record(repo, target, upstream)
 
@@ -117,24 +154,39 @@ def run_gate(args, repo, d, config_path, head, clean):
                 found.append(evaluate_with(record, baseline_data(ref), args))
             return found
 
-        rerun = rerunner(exe, args, samples, meta, positions, counters)
+        rerun = rerunner(exe, args, samples, meta, positions, counters, timings=timings)
         more_for = lambda names, record=record: rounds_needed(record, names)
+
+        def affordable(names, extra, record=record, state=state, budget=budget):
+            return budget.affords(planning.pass_estimate(names, max(extra, rounds_needed(record, names)), state))
 
         # A benchmark the baseline knows to sit at two levels is measured for enough rounds from the start for the
         # two-level test to work, instead of finding out only when it looks regressed.
         known = read_json(t["baseline"]).get("benchmarks", {}) if Path(t["baseline"]).is_file() else {}
         groups = {group_of(n) for n, b in known.items() if isinstance(b, dict) and b.get("modes") and n in samples}
         bimodal = {n for n in samples if group_of(n) in groups}
-        if bimodal and more_for(bimodal):
+        # Full measures them that long from the start; quick only when a verdict turns out to depend on it (the
+        # confirmation and retry passes below always gather that many samples for what they re-measure).
+        if args.level == levels.FULL and bimodal and more_for(bimodal):
             print(f"sub0perf: {len(bimodal)} benchmark(s) are known to be bimodal; measuring them for {more_for(bimodal)} more round(s)")
             rerun(bimodal, more_for(bimodal))
 
         # Inconclusive (noisy, environment-shifted) results are measured once more with twice the rounds, and a push
         # is never blocked by what stays inconclusive. One noisy measurement never blocks either: whatever regressed
         # is re-measured, and only what persists counts.
-        retried, _ = retry_inconclusive(both, rerun, args.rounds, more_for)
+        retried, _ = retry_inconclusive(both, rerun, args.rounds, more_for, affordable if quick and args.budget_seconds else None)
+        # A regression is always confirmed before it blocks, even if that overruns a quick budget.
         confirm_regressions(both, rerun, args.confirm_rounds, more_for)
         inconclusive = sorted(inconclusive_in(both())[0])
+        measured_s = budget.elapsed()
+        planning.absorb_timings(state, timings)
+        planning.mark_measured(state, chosen, head)
+        planning.save_state(d, target, state)
+        print(f"\nsub0perf: measured {len(chosen)}/{len(all_names)} benchmarks at the {args.level} level in {measured_s:.0f} s"
+              + (f" (budget {args.budget_seconds:g} s)" if args.budget_seconds else ""))
+        if budget.overrun():
+            print(f"sub0perf: the time budget was exceeded by {budget.overrun():.0f} s (confirming a regression, or the always-measured "
+                  f"pairs and controls, take precedence over the budget)")
         record["inconclusive"] = inconclusive
         record["inconclusive_retried"] = sorted(retried)
         save_record(repo, target, record, exe=exe)  # the record before push (with any extra rounds), and the build that made it
@@ -173,7 +225,8 @@ def run_gate(args, repo, d, config_path, head, clean):
             print("  (recorded in the local record and log; re-run the check on a quieter machine to judge them)")
         log_event(repo, {"event": "gate", "target": target, "commit": head, "reference": ref_sha,
                          "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted, "unreproduced_vs_record": unreproduced,
-                         "inconclusive": inconclusive, "seed": args.seed})
+                         "inconclusive": inconclusive, "seed": args.seed, "level": args.level,
+                         "measured": len(chosen), "benchmarks": len(all_names), "seconds": round(measured_s, 1)})
     return 1 if blocked else 0
 
 

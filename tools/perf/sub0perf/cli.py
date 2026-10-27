@@ -7,7 +7,7 @@ noise, and paired comparisons with hand-written references.
   bench_check.py baseline --results samples.json --baseline perf/baselines/<host>.json
   bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
   bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
-  bench_check.py gate     [--repo DIR] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
+  bench_check.py gate     [--repo DIR] [--level quick|full] [--budget SECONDS] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
   bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH  [--pin file=F,var=V,repo=owner/name ...]
 
 How a run is made robust (`run`, and `auto` which runs then checks):
@@ -70,13 +70,13 @@ import contextlib
 import os
 from pathlib import Path
 
-from . import platform_proc
+from . import levels, platform_proc, plan as planning
 from .accept import accept_command, baseline_command
 from .baseline import make_record, write_samples
 from .common import read_json
 from .confirm import confirm_regressions, noisy_names
-from .gate import gate_command
-from .gitstate import save_record
+from .gate import choose_benchmarks, gate_command
+from .gitstate import git_head, perf_dir, save_record, tree_clean
 from .hooks import install_hooks_command, note_checkout_command
 from .judge import evaluate_with
 from .lock import LockTimeout, PerfLock
@@ -109,27 +109,51 @@ def auto_command(args):
 
 
 def measure_and_judge(args):
-    samples, meta, positions, counters = measure_all(args.exe, args)
+    from .runner import list_names
+    levels.resolve(args, [])  # --level / SUB0MATH_PERF_LEVEL, else quick; refs only matter to the pre-push gate
+    repo = Path(args.repo) if args.repo else None
+    perf = perf_dir(repo) if repo else None
+    head = (git_head(repo) if repo else None) or str(args.seed)
+    clean = bool(repo) and tree_clean(repo)
+    state = planning.load_state(perf, args.target) if args.target else planning.default_state()
+    timings = planning.new_timings()
+    print(f"sub0perf: level {args.level} ({args.level_why})")
+    if args.filter:  # the user chose the benchmarks
+        names, rounds = None, args.rounds
+    else:
+        names, rounds = choose_benchmarks(args, args.exe, args.target or Path(args.exe).stem, state, head, list_names(args.exe, ""))
+        args.subset = len(names) < len(list_names(args.exe, ""))
+    budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)
+    samples, meta, positions, counters = measure_all(args.exe, args, names=names, rounds=rounds, timings=timings)
     record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed)
-    # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total.
+    # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total (a quick run only while the budget allows).
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate_with(record, args.baseline, args, bool(args.filter))
         noisy = noisy_names(rows, pair_rows)
         if not noisy:
             break
+        if args.level == levels.QUICK and args.budget_seconds and not budget.affords(planning.pass_estimate(noisy, 1, state)):
+            print(f"sub0perf: {len(noisy)} benchmark(s) too noisy; another round does not fit the time budget")
+            break
         print(f"{len(noisy)} benchmark(s) too noisy; adding a round for them", flush=True)
         # Extra rounds re-measure only the noisy set; the others repeat their median so rounds stay aligned.
         before = {n: len(v) for n, v in samples.items()}
         run_rounds(args.exe, sorted(noisy), 1, args.epochs, args.max_load, args.settle, args.seed, len(meta), samples, meta,
-                   positions, counters)
+                   positions, counters, timings)
         fill_unmeasured(samples, positions, before)
-    rerun = rerunner(args.exe, args, samples, meta, positions, counters)
+    rerun = rerunner(args.exe, args, samples, meta, positions, counters, timings)
     confirm_regressions(lambda: [evaluate_with(record, args.baseline, args, bool(args.filter))], rerun, args.confirm_rounds,
                         lambda names: rounds_needed(record, names))
     if args.out:
         write_samples(args.out, record)
     if args.record and args.target:
         save_record(Path(args.repo or "."), args.target, record, only_if_missing=True, exe=args.exe)
+    if args.target and perf and clean and not args.filter:  # keep what was measured when, and what it cost, for the next plan
+        planning.absorb_timings(state, timings)
+        planning.mark_measured(state, names if names is not None else list_names(args.exe, ""), head)
+        planning.save_state(perf, args.target, state)
+    if budget.overrun():
+        print(f"sub0perf: the time budget was exceeded by {budget.overrun():.0f} s")
     _, _, regressed = report(record, args)
     return 0 if args.report_only or not regressed else 1
 
@@ -145,6 +169,17 @@ def main():
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--max-rounds", type=int, default=0, help="auto: total rounds allowed for noisy benchmarks (default 2x)")
     parser.add_argument("--epochs", type=int, default=0, help="override nanobench epochs (quicker, noisier)")
+    parser.add_argument("--level", choices=list(levels.LEVELS), default=None,
+                        help="gate, auto: quick (default; a time-budgeted baseline of coverage) or full (everything, full rigour). "
+                             "Precedence: --level, then SUB0MATH_PERF_LEVEL, then a pushed tag matching the full-ref patterns "
+                             "(default v*, milestone/*), then quick")
+    parser.add_argument("--budget", type=float, default=None, metavar="SECONDS",
+                        help="gate, auto: target seconds of measuring. Quick defaults to SUB0MATH_PERF_BUDGET, the configured "
+                             "quick budget, else 90; full has none unless given. 0 = no budget")
+    parser.add_argument("--full-refs", action="append", default=[], metavar="PATTERNS",
+                        help="install-hooks: comma-separated tag-name patterns whose push selects the full level (default v*,milestone/*)")
+    parser.add_argument("--quick-budget", type=float, default=None, metavar="SECONDS",
+                        help="install-hooks: the quick gate's budget for this repository")
     parser.add_argument("--confirm-rounds", type=int, default=4,
                         help="auto, gate: extra rounds for just the benchmarks that regressed; only regressions that persist count (0 = off)")
     parser.add_argument("--seed", type=int, default=1, help="shuffle seed of the rounds (recorded in the records)")

@@ -6,6 +6,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from . import levels
 from .common import atomic_write_text, read_json, tooling_script
 from .gitstate import git, git_head, log_event, perf_dir
 from .pins import parse_pin
@@ -52,6 +53,14 @@ def install_hooks_command(args):
     config = read_json(config_path) if config_path.is_file() else {"targets": {}}
     config["targets"][args.target] = {"build_dir": str(Path(args.build_dir).resolve()), "exe": str(Path(args.exe).resolve()),
                                       "baseline": str(Path(args.baseline).resolve()), "config": args.config or ""}
+    if getattr(args, "full_refs", None):  # tag-name patterns whose push runs the full level; "" restores the defaults
+        patterns = [p for text in args.full_refs for p in levels.parse_patterns(text)]
+        if patterns:
+            config["full_refs"] = patterns
+        else:
+            config.pop("full_refs", None)
+    if getattr(args, "quick_budget", None) not in (None, ""):
+        config["quick_budget"] = float(args.quick_budget)
     if getattr(args, "pin", None):
         try:
             new_pins = [parse_pin(text) for text in args.pin]
