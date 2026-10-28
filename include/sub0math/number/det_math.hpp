@@ -475,7 +475,7 @@ constexpr double kernelSin(double x, double y, int iy) noexcept
 // cos on |x| <= pi/4 with a tail y.
 constexpr double kernelCos(double x, double y) noexcept
 {
-    constexpr double one = 1.0;
+    constexpr double kOne = 1.0;
     constexpr double C1 = 4.16666666666666019037e-02;
     constexpr double C2 = -1.38888888888741095749e-03;
     constexpr double C3 = 2.48015872894767294178e-05;
@@ -488,14 +488,14 @@ constexpr double kernelCos(double x, double y) noexcept
     {
         if (static_cast<int>(x) == 0)
         {
-            return one;
+            return kOne;
         }
     }
     const double z = x * x;
     const double r = z * (C1 + z * (C2 + z * (C3 + z * (C4 + z * (C5 + z * C6)))));
     if (ix < 0x3FD33333) // |x| < 0.3
     {
-        return one - (0.5 * z - (z * r - x * y));
+        return kOne - (0.5 * z - (z * r - x * y));
     }
     double qx = 0.0;
     if (ix > 0x3fe90000) // |x| > 0.78125
@@ -507,7 +507,7 @@ constexpr double kernelCos(double x, double y) noexcept
         qx = fromHighWord(ix - 0x00200000); // |x| / 4
     }
     const double hz = 0.5 * z - qx;
-    const double a = one - qx;
+    const double a = kOne - qx;
     return a - (hz - (z * r - x * y));
 }
 
@@ -774,7 +774,7 @@ struct SinCos
  */
 [[nodiscard]] constexpr double exp(double x) noexcept
 {
-    constexpr double one = 1.0;
+    constexpr double kOne = 1.0;
     constexpr double huge = 1.0e+300;
     constexpr double twom1000 = 9.33263618503218878990e-302; // 2^-1000
     constexpr double oThreshold = 7.09782712893383973096e+02;
@@ -841,9 +841,9 @@ struct SinCos
     }
     else if (hx < 0x3e300000) // |x| < 2^-28
     {
-        if (huge + x > one)
+        if (huge + x > kOne)
         {
-            return one + x; // trigger inexact
+            return kOne + x; // trigger inexact
         }
     }
 
@@ -852,9 +852,9 @@ struct SinCos
     const double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
     if (k == 0)
     {
-        return one - ((x * c) / (c - 2.0) - x);
+        return kOne - ((x * c) / (c - 2.0) - x);
     }
-    const double y = one - ((lo - (x * c) / (2.0 - c)) - hi);
+    const double y = kOne - ((lo - (x * c) / (2.0 - c)) - hi);
     if (k >= -1021)
     {
         if (k == 1024)
