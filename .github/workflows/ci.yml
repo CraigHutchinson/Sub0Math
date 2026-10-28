@@ -1,151 +1,43 @@
 name: CI
 
+# Smoke tier: one Linux job on every push to main and every pull request (docs/ci-strategy.md). The full tier
+# (other compilers and platforms, sanitizers, long suites, provenance) is ci-full.yml. Performance is not
+# measured in CI: the local gate owns it.
+# Off switch: repository variable CI_MODE=off (or [skip ci] in a commit message, or the ci:skip label).
+
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'NOTICE*'
+      - '.ci/**'
   pull_request:
     branches: [main]
-  workflow_dispatch:
+    # labeled/unlabeled re-evaluate the ci/policy status (ci:local-verified, ci:skip); they do not rebuild.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'NOTICE*'
+      - '.ci/**'
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # The performance tooling's own self-test (synthetic samples, temporary git repositories); stdlib only.
-  python-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Unit tests (tools/perf)
-        run: python -m unittest discover -s tools/perf -v
-      - name: Unit tests (tools/provenance)
-        run: python -m unittest discover -s tools/provenance -v
-
-  build-linux:
-    name: build-linux (${{ matrix.compiler }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { compiler: gcc, cc: gcc-14, cxx: g++-14 }
-          - { compiler: clang, cc: clang-19, cxx: clang++-19 }
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y g++-14 clang-19 ninja-build
-      - name: Configure
-        run: cmake --preset ci-unix -G Ninja
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-      - name: Build
-        run: cmake --build --preset ci-unix
-      - name: Test
-        run: ctest --preset ci-unix
-
-  # FMA hardware available: the tests build with -ffp-contract=off (sub0math_target_deterministic_fp), so
-  # results must match the baseline legs. Proves the determinism helper holds when the compiler could fuse.
-  build-linux-fma:
-    name: build-linux (gcc, x86-64-v3 FMA)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
-      - name: Check the target has FMA
-        run: g++-14 -march=x86-64-v3 -dM -E -x c++ /dev/null | grep -q __FMA__
-      - name: Configure
-        run: cmake --preset ci-unix -G Ninja -DCMAKE_CXX_FLAGS=-march=x86-64-v3 -DSUB0MATH_BUILD_BENCHMARKS=OFF
-        env:
-          CC: gcc-14
-          CXX: g++-14
-      - name: Build
-        run: cmake --build --preset ci-unix
-      - name: Test
-        run: ctest --preset ci-unix
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake --preset ci-msvc
-      - name: Build
-        run: cmake --build --preset ci-msvc
-      - name: Test
-        run: ctest --preset ci-msvc
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake --preset ci-unix
-      - name: Build
-        run: cmake --build --preset ci-unix
-      - name: Test
-        run: ctest --preset ci-unix
-
-  sanitizers:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y g++-14
-      - name: Configure (ASan + UBSan)
-        run: cmake --preset ci-asan
-        env:
-          CC: gcc-14
-          CXX: g++-14
-      - name: Build
-        run: cmake --build --preset ci-asan
-      - name: Test
-        run: ctest --preset ci-asan
-
-  performance:
-    name: performance (timing informational)
-    runs-on: ubuntu-latest
-    # Shared runners are noisy: timing drift is reported in the job summary, never blocking (check runs with
-    # --report-only). Build, test and script errors still fail the job; there is no job-level continue-on-error.
-    # Deterministic gates (size static_asserts, must-not-compile checks) run in every test job instead.
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
-      - name: Configure (profile preset)
-        run: cmake --preset profile -G Ninja -DSUB0MATH_PERF_HOST=github-ubuntu -DSUB0MATH_PERF_ON_BUILD=OFF
-        env:
-          CC: gcc-14
-          CXX: g++-14
-      - name: Build
-        run: cmake --build --preset profile
-      - name: Test the profiling build
-        run: ctest --preset profile
-      - name: Benchmark (interleaved, calibrated rounds; pair ratios need no baseline)
-        run: |
-          cmake --build --preset profile --target Sub0Math_Bench_runs
-          python3 tools/perf/bench_check.py check --report-only --tolerance 0.25 \
-            --results build-profile/perf/Sub0Math_Bench.samples.json --baseline perf/baselines/github-ubuntu.json
-      - name: Vectorization remarks
-        run: |
-          cmake --preset vectorization -G Ninja
-          python3 tools/perf/vectorization_report.py --build-dir build-vec --target Sub0Math_Bench \
-            --output build-vec/vectorization.md
-          head -n 3 build-vec/vectorization.md >> "$GITHUB_STEP_SUMMARY"
-        env:
-          CC: gcc-14
-          CXX: g++-14
-      - uses: actions/upload-artifact@v4
-        with:
-          name: performance
-          path: |
-            build-profile/perf/*.json
-            build-vec/vectorization.md
+  smoke:
+    # The pinned ref is the commit of CraigHutchinson/.github that holds the reusable workflows.
+    uses: CraigHutchinson/.github/.github/workflows/cpp-smoke.yml@CIREF_TODO
+    with:
+      apt-packages: g++-14 ninja-build ccache
+      cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake
+      extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
+    permissions: { contents: read, statuses: write, actions: read, pull-requests: read, checks: read }

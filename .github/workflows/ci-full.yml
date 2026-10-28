@@ -1,0 +1,52 @@
+name: CI full
+
+# Full tier (docs/ci-strategy.md): Linux GCC and Clang, an FMA leg, MSVC, macOS, sanitizers,
+# `ctest --preset full`, the tools' python tests.
+# Triggers: release tags, manual dispatch, a pull request labelled ci:full, and a weekly run that is skipped when
+# main has not changed since the last successful full run. Honours CI_MODE (off | smoke | full) and ci:skip.
+
+on:
+  push:
+    tags: ['v*', 'milestone/*']
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize]
+  schedule:
+    - cron: '23 5 * * 1'
+
+concurrency:
+  group: ci-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    # Runs only with a ci:full label on pull requests; the schedule only when main changed; never while CI is off.
+    uses: CraigHutchinson/.github/.github/workflows/change-gate.yml@CIREF_TODO
+    with:
+      full-workflow-file: ci-full.yml
+    permissions: { contents: read, actions: read }
+
+  full:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@CIREF_TODO
+    with:
+      cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake
+      extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
+      fma: true
+      fma-cc: gcc-14
+      fma-cxx: g++-14
+      windows: true
+      macos: true
+      sanitizers: true
+    permissions: { contents: read, statuses: write, actions: read, pull-requests: read, checks: read }
+
+  # The performance tooling's own self-test (synthetic samples, temporary git repositories); stdlib only.
+  tools-tests:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    uses: ./.github/workflows/tools-tests.yml

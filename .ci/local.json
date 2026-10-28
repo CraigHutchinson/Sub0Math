@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Sub0Math local checks (docs/ci-strategy.md); run: python <.github repo>/tools/ci/local_ci.py --level quick|full",
+  "levels": {
+    "quick": {
+      "steps": [
+        {
+          "name": "gcc",
+          "compiler": "gcc",
+          "commands": [
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF",
+            "cmake --build {builddir} -j {jobs}",
+            "ctest --preset quick --test-dir {builddir}"
+          ]
+        },
+        {
+          "name": "clang-x86-64-v3",
+          "compiler": "clang",
+          "optional": true,
+          "commands": [
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
+            "cmake --build {builddir} -j {jobs}",
+            "ctest --preset quick --test-dir {builddir}"
+          ]
+        },
+        {
+          "name": "python-tests",
+          "commands": [
+            "{python} -m unittest discover -s tools/perf",
+            "{python} -m unittest discover -s tools/provenance"
+          ]
+        }
+      ]
+    },
+    "full": {
+      "steps": [
+        {
+          "name": "gcc",
+          "compiler": "gcc",
+          "commands": [
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF",
+            "cmake --build {builddir} -j {jobs}",
+            "ctest --preset full --test-dir {builddir}"
+          ]
+        },
+        {
+          "name": "clang-x86-64-v3",
+          "compiler": "clang",
+          "optional": true,
+          "commands": [
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
+            "cmake --build {builddir} -j {jobs}",
+            "ctest --preset full --test-dir {builddir}"
+          ]
+        },
+        {
+          "name": "python-tests",
+          "commands": [
+            "{python} -m unittest discover -s tools/perf",
+            "{python} -m unittest discover -s tools/provenance"
+          ]
+        }
+      ]
+    }
+  }
+}
