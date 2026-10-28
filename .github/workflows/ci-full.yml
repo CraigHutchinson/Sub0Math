@@ -25,7 +25,7 @@ permissions:
 jobs:
   gate:
     # Runs only with a ci:full label on pull requests; the schedule only when main changed; never while CI is off.
-    uses: CraigHutchinson/.github/.github/workflows/change-gate.yml@CIREF_TODO
+    uses: CraigHutchinson/.github/.github/workflows/change-gate.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
     with:
       full-workflow-file: ci-full.yml
     permissions: { contents: read, actions: read }
@@ -33,7 +33,7 @@ jobs:
   full:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@CIREF_TODO
+    uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
     with:
       cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake
       extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
@@ -50,3 +50,12 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     uses: ./.github/workflows/tools-tests.yml
+
+  # Reports ci/policy for pull requests once every job above has finished (no waiting on a billed runner).
+  policy:
+    needs: [full, tools-tests]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    uses: CraigHutchinson/.github/.github/workflows/ci-policy.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
+    with:
+      upstream-result: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}
+    permissions: { contents: read, statuses: write, checks: read }

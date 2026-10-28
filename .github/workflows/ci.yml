@@ -35,7 +35,7 @@ permissions:
 jobs:
   smoke:
     # The pinned ref is the commit of CraigHutchinson/.github that holds the reusable workflows.
-    uses: CraigHutchinson/.github/.github/workflows/cpp-smoke.yml@CIREF_TODO
+    uses: CraigHutchinson/.github/.github/workflows/cpp-smoke.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
     with:
       apt-packages: g++-14 ninja-build ccache
       cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake
