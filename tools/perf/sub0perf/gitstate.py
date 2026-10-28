@@ -155,10 +155,11 @@ def push_problems(refs, head, clean, resolve=lambda sha: sha):
 
 def is_documentation(path):
     """True for files that no build reads: Markdown anywhere, anything under docs/, licence files, and the
-    provenance manifests under upstream/ (tools/provenance)."""
+    provenance manifests under upstream/ (tools/provenance), and CI configuration (.github/, .ci/)."""
     name = path.rsplit("/", 1)[-1]
     return (path.endswith(".md") or path.startswith("docs/") or name.upper().startswith(("LICENSE", "LICENCE"))
-            or (path.startswith("upstream/") and path.endswith(".json")))
+            or (path.startswith("upstream/") and path.endswith(".json"))
+            or path.startswith((".github/", ".ci/")))  # CI configuration: no build reads it
 
 
 def documentation_only(refs, changed_paths):

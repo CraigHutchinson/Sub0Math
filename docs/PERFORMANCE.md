@@ -236,7 +236,7 @@ a hook prints a message and does nothing instead of failing.
   push, saying why, when tracked files have uncommitted changes (the build would include them), or when
   the commit being pushed for any ref (deletions excepted) is not the checked-out HEAD. A push that
   only deletes refs is not measured, and neither is one whose every update against the remote changes only
-  documentation (Markdown, `docs/`, licence files, provenance manifests under `upstream/`): measuring then could only find noise, and a bimodal
+  documentation (Markdown, `docs/`, licence files, provenance manifests under `upstream/`, CI configuration under `.github/` and `.ci/`): measuring then could only find noise, and a bimodal
   benchmark once blocked an AGENTS.md change. The skip is logged. A new branch, or a remote commit not
   present locally, is always measured. Otherwise the build is the pushed commit and the gate proceeds.
   Run by hand (`bench_check.py gate`, without `--refs-from-stdin`) it only warns about a dirty tree.

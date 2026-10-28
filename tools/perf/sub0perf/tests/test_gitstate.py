@@ -32,6 +32,8 @@ class PushedRefsTest(unittest.TestCase):
         self.assertFalse(gitstate.is_documentation("docsy/a.cpp"))
         self.assertTrue(gitstate.is_documentation("upstream/bikelab.json"))  # provenance manifests are not built
         self.assertFalse(gitstate.is_documentation("upstream/patch.cpp"))
+        self.assertTrue(gitstate.is_documentation(".github/workflows/ci.yml"))  # CI configuration is not built
+        self.assertTrue(gitstate.is_documentation(".ci/local.json"))
 
     def refs(self, *shas):
         return [(f"refs/heads/b{i}", sha, f"refs/heads/b{i}", self.ZERO) for i, sha in enumerate(shas)]
