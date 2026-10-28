@@ -382,6 +382,17 @@ the slow reduction); `det::sincos` 0.75x, 0.91x and 1.05x. `det::atan2` against 
 all quadrants, same build, three runs): 0.71x (4.8 us against 6.8 us per 1024), so it is faster than the C library
 here. No optimising was done, so the three-pass rule has not been triggered.
 
+**Inlining pitfall (2026-10-28).** The `det` functions are `constexpr` header code, so each call site can inline the
+whole fdlibm kernel, including the argument reduction. A consumer's road-sampling function switched to separate
+`det::sin` and `det::cos` calls, and was itself inlined into every derivative of a loaded-wheel station. The
+derivative loops bloated, and the station ran 2.6x slower even on a path where no trigonometry executed. Where a
+transcendental sits on a branch inside a hot inlined function:
+- keep it in a separate non-inlined helper, and let the common path inline;
+- use `sincos` when both are needed: one reduction, and smaller code.
+
+An out-of-line function in a separate translation unit measured slower than a non-inlined helper in the same
+header (+18%).
+
 On MinGW-w64 GCC, the helper also adds `-Wa,-muse-unaligned-vector-move` when the assembler supports it.
 Windows guarantees only 16-byte stack alignment, but AVX code spills 32-byte vectors with aligned moves,
 which fault. A consumer's station tests segfaulted under `-march=x86-64-v3` until this was added
