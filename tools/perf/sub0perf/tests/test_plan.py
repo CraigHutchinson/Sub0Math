@@ -72,13 +72,24 @@ class PlanFitTest(unittest.TestCase):
     def test_one_group_over_the_budget_is_measured_alone_with_the_overrun_reported(self):
         state = state_with()
         for n in ("p0, Length", "p0, hand-written"):
+            state["costs"][n] = 8.0
+        state["benchmarks"] = {n: {"push": 5} for n in ALL if not n.startswith("p0")}  # p0 is the stalest
+        p = plan.plan_quick(ALL, state, "c1", 70.0)  # controls 12 s + p0 48 s: over the 52 s usable, within the 70 s budget
+        self.assertEqual(p.rotating, ["p0"])
+        self.assertIn("p0, Length", p.selected)
+        self.assertGreater(p.estimate, 52.5)
+
+    def test_a_group_over_the_whole_budget_is_deferred_not_measured_alone(self):
+        state = state_with()
+        for n in ("p0, Length", "p0, hand-written"):
             state["costs"][n] = 100.0
         state["benchmarks"] = {n: {"push": 5} for n in ALL if not n.startswith("p0")}  # p0 is the stalest
         p = plan.plan_quick(ALL, state, "c1", 30.0)
-        self.assertEqual(p.rotating, ["p0"])
-        self.assertIn("p0, Length", p.selected)
-        self.assertGreater(p.overrun, 0)
-        self.assertTrue(any("over the 30 s budget" in note for note in p.notes))
+        self.assertEqual(p.deferred, ["p0"])
+        self.assertNotIn("p0, Length", p.selected)
+        self.assertEqual(p.overrun, 0.0)
+        text = chr(10).join(plan.describe_plan(p, len(ALL), state, "c1"))
+        self.assertIn("not measured yet: 1 group(s)", text)
 
     def test_expensive_groups_are_skipped_but_cheaper_ones_still_fit(self):
         state = state_with()
@@ -255,3 +266,122 @@ class SubsetJudgingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeferTest(unittest.TestCase):
+    """Benchmarks with no recorded cost, or found too slow, are not planned at quick; they never justify an overrun."""
+
+    def test_unplanned_lists_unknown_and_slow(self):
+        state = state_with()
+        del state["costs"]["Loose 00"]
+        state["slow"] = {"Loose 01": 9.0}
+        self.assertEqual(plan.unplanned(ALL, state), ["Loose 00", "Loose 01"])
+
+    def test_deferred_benchmarks_are_never_selected_or_made_controls(self):
+        state = state_with()
+        new = ["Trail bike whole run, hand-written", "Trail bike whole run"]
+        state["slow"] = {n: 9.0 for n in new}
+        p = plan.plan_quick(ALL + new, state, "c1", 60.0, defer=plan.unplanned(ALL + new, state))
+        self.assertFalse(set(new) & set(p.selected))
+        self.assertFalse(set(new) & set(p.controls))
+        self.assertEqual(p.deferred, ["Trail bike whole run"])
+        self.assertLessEqual(p.estimate, 60.0)
+
+    def test_new_expensive_benchmarks_do_not_displace_the_budget(self):
+        # The 2026-11-03 case: 8 never-measured benchmarks are the stalest and the median cost is tiny.
+        state = state_with(cost=0.05)
+        new = [f"Whole run {i}" for i in range(8)]
+        everything = ALL + new
+        state["slow"] = {n: 6.0 for n in new}
+        p = plan.plan_quick(everything, state, "c1", 90.0, defer=plan.unplanned(everything, state))
+        self.assertFalse(set(new) & set(p.selected))
+        self.assertEqual(sorted(p.deferred), sorted(new))
+        self.assertLessEqual(p.estimate, 90.0)
+
+    def test_absorbing_a_timing_clears_slow(self):
+        state = state_with()
+        state["slow"] = {"Loose 01": 9.0}
+        timings = plan.new_timings()
+        timings["bench"]["Loose 01"] = [20.0]
+        plan.absorb_timings(state, timings)
+        self.assertEqual(state["slow"], {})
+        self.assertEqual(state["costs"]["Loose 01"], 20.0)
+
+
+class ProbeTest(unittest.TestCase):
+    def setUp(self):
+        from .. import runner
+        self.runner = runner
+        self.now = [0.0]
+        self.durations = {}
+        self.args = type("A", (), {"epochs": 0})()
+        self.original = runner.measure_full
+
+        def fake(exe, extra, scratch, timeout=None):
+            import subprocess
+            name = extra[1]
+            took = self.durations[name]
+            if timeout is not None and took > timeout:
+                self.now[0] += timeout
+                raise subprocess.TimeoutExpired(extra, timeout)
+            self.now[0] += took
+            return {}
+        runner.measure_full = fake
+
+    def tearDown(self):
+        self.runner.measure_full = self.original
+
+    def probe(self, names, allowance, per_probe):
+        return self.runner.probe_unknown("exe", names, self.args, allowance, per_probe, clock=lambda: self.now[0])
+
+    def test_a_slow_benchmark_is_cut_off_and_recorded_as_slow(self):
+        self.durations = {"fast": 1.0, "whole run": 600.0}
+        costs, slow, spent = self.probe(["fast", "whole run"], 20.0, 5.0)
+        self.assertEqual(costs, {"fast": 1.0})
+        self.assertEqual(slow, {"whole run": 5.0})
+        self.assertAlmostEqual(spent, 6.0)  # not 600
+
+    def test_the_allowance_bounds_the_total_and_leaves_the_rest_unknown(self):
+        self.durations = {f"b{i}": 4.0 for i in range(10)}
+        costs, slow, spent = self.probe(list(self.durations), 10.0, 5.0)
+        self.assertLessEqual(spent, 10.0)
+        self.assertLess(len(costs), 10)
+        self.assertEqual(slow, {})  # an allowance cut-off says nothing about the benchmark
+
+    def test_launch_kills_a_process_that_outlives_its_timeout(self):
+        import subprocess
+        import sys
+        import time
+        from .. import platform_proc
+        began = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            platform_proc.launch([sys.executable, "-c", "import time; time.sleep(60)"], 0.5)
+        self.assertLess(time.monotonic() - began, 20)
+
+
+class ChooseBenchmarksTest(unittest.TestCase):
+    """The gate probes benchmarks with no recorded cost before planning, and plans none that are slow or unreached."""
+
+    def test_new_slow_benchmarks_are_probed_cut_off_and_left_out(self):
+        from .. import gate
+        new = [f"Trail bike {i}" for i in range(3)]
+        everything = ALL + new
+        state = state_with()
+        probed = []
+
+        def fake_probe(exe, names, args, allowance, per_probe):
+            probed.append((list(names), allowance, per_probe))
+            return {}, {n: per_probe for n in names}, per_probe * len(names)
+
+        original = gate.probe_unknown
+        gate.probe_unknown = fake_probe
+        try:
+            args = type("A", (), {"level": "quick", "budget_seconds": 90.0, "rounds": 3, "epochs": 0})()
+            chosen, rounds, spent = gate.choose_benchmarks(args, "exe", "t", state, "c1", everything)
+        finally:
+            gate.probe_unknown = original
+        self.assertEqual(probed[0][0], new)  # only the unknown ones, within 20% of the budget, 10% each
+        self.assertEqual(probed[0][1:], (18.0, 9.0))
+        self.assertFalse(set(new) & set(chosen))
+        self.assertEqual(set(state["slow"]), set(new))
+        self.assertAlmostEqual(spent, 27.0)

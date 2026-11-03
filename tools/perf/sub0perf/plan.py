@@ -32,6 +32,8 @@ RESERVE = 0.25          # share of the budget kept back for confirmation and ret
 RECHECK_SHARE = 0.5     # share of the spendable budget that groups awaiting a re-check may take
 FALLBACK_COST = 1.0     # seconds per sample when nothing is known and no probe was made
 FALLBACK_ROUND_OVERHEAD = 2.0  # two steady calibrations per round, seconds
+PROBE_SHARE = 0.2       # share of the budget that timing benchmarks with no recorded cost may take, all together
+PROBE_CAP_SHARE = 0.1   # share of the budget one such probe may take; a benchmark that needs more is too slow for quick
 MAX_COVER_PUSHES = 1000
 
 
@@ -80,6 +82,7 @@ class Plan:
     reserve: float              # seconds kept for confirmation and retry passes
     overrun: float = 0.0        # seconds by which the plan itself exceeds the budget
     pushes_to_cover: int = 0    # pushes until every unit has had a turn, simulated from the costs
+    deferred: list = field(default_factory=list)  # unit keys left to the full level: cost unknown, too slow, or over the whole budget
     notes: list = field(default_factory=list)
 
 
@@ -91,12 +94,17 @@ def default_cost_of(costs):
     return statistics.median(costs.values()) if costs else FALLBACK_COST
 
 
-def select(names, state, commit, budget, rounds, reserve, default_cost, avoid):
-    """(units, controls, rechecks, rotating, skipped, estimate, chosen benchmark names) for one push."""
+def select(names, state, commit, budget, rounds, reserve, default_cost, avoid, defer=()):
+    """(units, controls, rechecks, rotating, skipped, estimate, chosen benchmark names, deferred) for one push.
+
+    `defer` names benchmarks a quick gate must not measure (cost unknown, or too slow); their groups are deferred, as is
+    a group that costs more than the whole budget beside the controls, since no overrun is justified for it.
+    """
     costs = state.get("costs", {})
     overhead = state.get("round_overhead", FALLBACK_ROUND_OVERHEAD)
     units = units_of(names)
-    controls = choose_controls(names, costs, avoid, default_cost=default_cost)
+    defer = set(defer)
+    controls = choose_controls([n for n in names if n not in defer], costs, avoid, default_cost=default_cost)
     chosen = set(controls)
     cost_of = lambda n: costs.get(n, default_cost)
 
@@ -105,7 +113,10 @@ def select(names, state, commit, budget, rounds, reserve, default_cost, avoid):
 
     estimate = rounds * (overhead + sum(cost_of(n) for n in controls))
     spend = budget * (1 - reserve)
+    base = estimate
     order = rotation_order(units, state.get("benchmarks", {}), commit)
+    deferred = [k for k in order if set(units[k]) & defer or base + added(k) > budget]
+    order = [k for k in order if k not in deferred]
     rechecks, rotating, skipped = [], [], []
     limit = estimate + max(0.0, spend - estimate) * RECHECK_SHARE
     for k in (k for k in order if k in set(state.get("recheck", []))):
@@ -130,16 +141,18 @@ def select(names, state, commit, budget, rounds, reserve, default_cost, avoid):
                 chosen |= set(units[k])
             else:
                 skipped.append(k)
-    return units, controls, rechecks, rotating, skipped, estimate, chosen
+    return units, controls, rechecks, rotating, skipped, estimate, chosen, deferred
 
 
-def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERVE, default_cost=None, avoid=()):
-    """A Plan for measuring `names` within `budget` seconds. `state` is the coverage state (see load_state)."""
+def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERVE, default_cost=None, avoid=(), defer=()):
+    """A Plan for measuring `names` within `budget` seconds. `state` is the coverage state (see load_state).
+
+    `defer`: benchmarks not to measure now (see select); their groups are listed in Plan.deferred."""
     costs = state.get("costs", {})
     if default_cost is None:
         default_cost = default_cost_of(costs)
-    units, controls, rechecks, rotating, skipped, estimate, chosen = select(names, state, commit, budget, rounds, reserve,
-                                                                           default_cost, avoid)
+    units, controls, rechecks, rotating, skipped, estimate, chosen, deferred = select(names, state, commit, budget, rounds,
+                                                                                      reserve, default_cost, avoid, defer)
     overrun = max(0.0, estimate - budget)
     notes = []
     if overrun:
@@ -149,7 +162,7 @@ def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERV
     # Replay the following pushes (no re-checks) to say how many it takes to give every group a turn.
     sim = {"benchmarks": {n: dict(v) for n, v in state.get("benchmarks", {}).items()}, "costs": costs,
            "round_overhead": state.get("round_overhead", FALLBACK_ROUND_OVERHEAD), "pushes": state.get("pushes", 0)}
-    covered, cover = set(), 0
+    covered, cover = set(deferred), 0  # deferred groups wait for full (or a cheaper probe), so they do not lengthen the cycle
     picked = chosen
     while cover < MAX_COVER_PUSHES:
         cover += 1
@@ -157,9 +170,9 @@ def plan_quick(names, state, commit, budget, rounds=QUICK_ROUNDS, reserve=RESERV
         mark_measured(sim, picked, "sim", date="")
         if len(covered) == len(units):
             break
-        picked = select(names, sim, f"sim{cover}:{commit}", budget, rounds, reserve, default_cost, avoid)[-1]
+        picked = select(names, sim, f"sim{cover}:{commit}", budget, rounds, reserve, default_cost, avoid, defer)[-2]
     return Plan(rounds, sorted(chosen), units, controls, rechecks, rotating, skipped, estimate, budget, budget * reserve, overrun,
-                cover, notes)
+                cover, deferred, notes)
 
 
 def describe_plan(plan, total, state, commit):
@@ -175,6 +188,10 @@ def describe_plan(plan, total, state, commit):
     lines += [f"sub0perf:   {note}" for note in plan.notes]
     lines.append(f"sub0perf:   coverage: measured {len(plan.selected)}/{total} now; every group is covered within "
                  f"{plan.pushes_to_cover} push(es)")
+    if plan.deferred:
+        shown = ", ".join(plan.deferred[:5]) + (f" and {len(plan.deferred) - 5} more" if len(plan.deferred) > 5 else "")
+        lines.append(f"sub0perf:   not measured yet: {len(plan.deferred)} group(s) too slow for the quick budget or not yet timed "
+                     f"({shown}); the full level measures them")
     if plan.skipped:
         stalest = plan.skipped[0]
         last = unit_staleness(plan.units[stalest], benchmarks)
@@ -184,7 +201,7 @@ def describe_plan(plan, total, state, commit):
 
 
 def default_state():
-    return {"pushes": 0, "benchmarks": {}, "costs": {}, "round_overhead": FALLBACK_ROUND_OVERHEAD, "recheck": []}
+    return {"pushes": 0, "benchmarks": {}, "costs": {}, "slow": {}, "round_overhead": FALLBACK_ROUND_OVERHEAD, "recheck": []}
 
 
 def state_path(perf, target):
@@ -220,6 +237,7 @@ def absorb_timings(state, timings):
     for name, seconds in (timings.get("bench") or {}).items():
         if seconds:
             state.setdefault("costs", {})[name] = round(statistics.median(seconds), 3)
+            state.get("slow", {}).pop(name, None)  # measured after all (a full run): it has a cost now
     if timings.get("overhead"):
         state["round_overhead"] = round(statistics.median(timings["overhead"]), 3)
 
@@ -230,6 +248,12 @@ def update_recheck(state, units, measured, flagged):
     measured, flagged = set(measured), set(flagged)
     keep = {k for k in state.get("recheck", []) if k in units and not (set(units[k]) & measured)}
     state["recheck"] = sorted(keep | {k for k, members in units.items() if set(members) & flagged})
+
+
+def unplanned(names, state):
+    """Benchmarks a quick gate must not plan yet: those with no recorded cost, and those a probe found too slow."""
+    costs, slow = state.get("costs", {}), state.get("slow", {})
+    return [n for n in names if n not in costs or n in slow]
 
 
 def new_timings():

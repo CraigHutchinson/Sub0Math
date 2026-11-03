@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .baseline import baseline_data, make_record
 from . import levels, plan as planning
-from .common import group_of, read_json, tooling_script
+from .common import REFERENCE_MARK, group_of, read_json, tooling_script
 from .confirm import confirm_regressions, inconclusive_in, retry_inconclusive
 from .gitstate import (ZERO_SHA_CHARS, accepted_since, changed_paths_between, documentation_only, git, git_head, log_event,
                        parse_push_refs, perf_dir, pushed_refs, push_problems, reference_binary, reference_record, save_record, tree_clean)
@@ -16,7 +16,7 @@ from .lock import LockTimeout, PerfLock
 from .pins import pin_problems, show_file_at
 from .report import render, report
 from .reproduce import reproduced_against
-from .runner import list_names, measure_all, probe_cost, rerunner
+from .runner import list_names, measure_all, probe_cost, probe_unknown, rerunner
 from .stats import rounds_needed
 
 
@@ -103,26 +103,49 @@ def gate_command(args):
         return 1
 
 
+def probe_unknown_costs(exe, args, state, all_names):
+    """Times each benchmark that has no recorded cost, within a share of the budget. Returns the seconds spent.
+
+    A new benchmark may cost minutes per sample, and its cost is not known until it has run; so one sample of each is
+    timed first, cut off at a tenth of the budget. What is slower is recorded as slow and what the allowance did not
+    reach stays unknown; neither is planned (see planning.unplanned), both wait for the full level or a later probe.
+    """
+    unknown = [n for n in all_names if n not in state["costs"] and n not in state.get("slow", {})]
+    if not unknown:
+        return 0.0
+    first = not state["costs"]
+    spent = 0.0
+    if first:  # nothing timed yet: also time a round's calibration
+        _, overhead = probe_cost(exe, (planning.choose_controls(all_names, {}, (), 1) or all_names)[0], args)
+        state["round_overhead"] = overhead
+        spent += overhead / 2
+    refs_first = sorted(unknown, key=lambda n: REFERENCE_MARK not in n)  # controls come from the references
+    costs, slow, took = probe_unknown(exe, refs_first, args, args.budget_seconds * planning.PROBE_SHARE,
+                                      args.budget_seconds * planning.PROBE_CAP_SHARE)
+    state["costs"].update(costs)
+    state.setdefault("slow", {}).update(slow)
+    print(f"sub0perf: timed {len(costs)} of {len(unknown)} benchmark(s) with no recorded cost in {took:.0f} s"
+          + (f"; {len(slow)} slower than {args.budget_seconds * planning.PROBE_CAP_SHARE:.0f} s per sample, left to the full level" if slow else ""))
+    return spent + took
+
+
 def choose_benchmarks(args, exe, target, state, head, all_names, baseline=None):
-    """(benchmarks to measure, rounds) for this level: everything at full, a plan that fits the time budget at quick."""
+    """(benchmarks to measure, rounds, seconds spent probing) for this level: everything at full, a plan that fits the time budget at quick."""
     rounds = args.rounds
     if args.level != levels.QUICK:
-        return all_names, rounds
+        return all_names, rounds, 0.0
     if not args.budget_seconds:
         print(f"sub0perf: quick level without a time budget: all {len(all_names)} benchmarks, {rounds} rounds")
-        return all_names, rounds
-    per_sample = None
-    if not state["costs"] and all_names:  # nothing timed yet: a cheap probe of one sample and one calibration
-        per_sample, overhead = probe_cost(exe, (planning.choose_controls(all_names, {}, (), 1) or all_names)[0], args)
-        state["round_overhead"] = overhead
-        print(f"sub0perf: no timings of {target} yet; probe: {per_sample:.1f} s per sample, {overhead:.1f} s of calibration per round")
+        return all_names, rounds, 0.0
+    spent = probe_unknown_costs(exe, args, state, all_names)
     rounds = max(rounds, planning.QUICK_ROUNDS)
     known = read_json(baseline).get("benchmarks", {}) if baseline and Path(baseline).is_file() else {}
     bimodal = [n for n, b in known.items() if isinstance(b, dict) and b.get("modes")]
-    plan = planning.plan_quick(all_names, state, head, args.budget_seconds, rounds, default_cost=per_sample, avoid=bimodal)
+    plan = planning.plan_quick(all_names, state, head, max(args.budget_seconds - spent, 1.0), rounds, avoid=bimodal,
+                               defer=planning.unplanned(all_names, state))
     for line in planning.describe_plan(plan, len(all_names), state, head):
         print(line)
-    return plan.selected, rounds
+    return plan.selected, rounds, spent
 
 
 def run_gate(args, repo, d, config_path, head, clean):
@@ -143,9 +166,11 @@ def run_gate(args, repo, d, config_path, head, clean):
         state = planning.load_state(d, target)
         timings = planning.new_timings()
         all_names = list_names(exe, "")
-        chosen, rounds = choose_benchmarks(args, exe, target, state, head, all_names, t["baseline"])
+        chosen, rounds, probed_s = choose_benchmarks(args, exe, target, state, head, all_names, t["baseline"])
+        planning.save_state(d, target, state)  # what the probe learned survives a gate that is stopped
         args.subset = len(chosen) < len(all_names)
-        budget = planning.Budget(args.budget_seconds)  # measuring time; the build above does not count
+        # Measuring time, probing included; the build above does not count.
+        budget = planning.Budget(max(args.budget_seconds - probed_s, 0.0) if args.budget_seconds else args.budget_seconds)
         samples, meta, positions, counters = measure_all(exe, args, names=chosen, rounds=rounds, timings=timings)
         record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed)
         record["level"] = args.level
@@ -183,7 +208,7 @@ def run_gate(args, repo, d, config_path, head, clean):
         # A regression is always confirmed before it blocks, even if that overruns a quick budget.
         first_regressed, _ = confirm_regressions(both, rerun, args.confirm_rounds, more_for)
         inconclusive = sorted(inconclusive_in(both())[0])
-        measured_s = budget.elapsed()
+        measured_s = budget.elapsed() + probed_s
         planning.absorb_timings(state, timings)
         planning.update_recheck(state, planning.units_of(all_names), chosen, set(first_regressed) | set(inconclusive))
         planning.mark_measured(state, chosen, head)

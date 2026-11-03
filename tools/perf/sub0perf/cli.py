@@ -55,6 +55,8 @@ that file with the change. `git push --no-verify` bypasses the hook, as with any
 Levels and the time budget. `gate` and `auto` run at the `quick` level by default: 2 controls (hand-written references) always, plus as
 many whole groups (a pair group, or a standalone benchmark), stalest first, as fit --budget (default 90 s, SUB0MATH_PERF_BUDGET, or the configured quick budget). A regression
 is still confirmed in full even if that overruns the budget; inconclusive and unmeasured benchmarks never block.
+A benchmark with no recorded cost is timed first (one sample, cut off at a tenth of the budget, a fifth in all); a slower one, or a group costing more than the whole budget, is
+reported as not measured yet and left to the full level, and never justifies an overrun.
 `--level full` (or SUB0MATH_PERF_LEVEL=full, or pushing a tag matching `v*` / `milestone/*`, configurable with
 install-hooks --full-refs) measures everything with the full method and no budget. The level and why are the first
 line of the gate output. See docs/PERFORMANCE.md, "Levels, time budget and coverage".
@@ -128,7 +130,7 @@ def measure_and_judge(args):
     if args.filter:  # the user chose the benchmarks
         names, rounds = None, args.rounds
     else:
-        names, rounds = choose_benchmarks(args, args.exe, args.target or Path(args.exe).stem, state, head, list_names(args.exe, ""),
+        names, rounds, _ = choose_benchmarks(args, args.exe, args.target or Path(args.exe).stem, state, head, list_names(args.exe, ""),
                                       args.baseline)
         args.subset = len(names) < len(list_names(args.exe, ""))
     budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)

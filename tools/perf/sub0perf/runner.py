@@ -16,13 +16,13 @@ COUNTERS = {"instructions": "median(instructions)", "cycles": "median(cpucycles)
             "branches": "median(branchinstructions)", "branch_misses": "median(branchmisses)"}
 
 
-def measure_full(exe, args, scratch):
+def measure_full(exe, args, scratch, timeout=None):
     """Runs the benchmark executable once; returns {name: (ns per op, {counter: per op})}.
 
     Counters are included only when the platform provides them (nanobench reports 0 otherwise).
     """
     out = Path(scratch) / "one.json"
-    platform_proc.launch([exe, *args, "--json", str(out)])
+    platform_proc.launch([exe, *args, "--json", str(out)], timeout)
     data = json.loads(out.read_text(encoding="utf-8"))
     results = {}
     for r in data["results"]:
@@ -150,6 +150,35 @@ def probe_cost(exe, name, args):
         began = time.monotonic()
         measure(exe, ["--exact", name, *extra], scratch)
         return time.monotonic() - began, 2 * calibration
+
+
+def probe_unknown(exe, names, args, allowance, per_probe, clock=time.monotonic):
+    """Times one sample of each of `names` (benchmarks with no recorded cost), within `allowance` seconds in all.
+
+    A benchmark is cut off after `per_probe` seconds (or what is left of the allowance): it is then too slow for a
+    quick gate and is reported as slow, with that many seconds as the least one sample costs. The allowance running
+    out leaves the rest unprobed. Returns (costs, slow, seconds spent).
+    """
+    extra = ["--epochs", str(args.epochs)] if args.epochs else []
+    costs, slow = {}, {}
+    began = clock()
+    with tempfile.TemporaryDirectory() as scratch:
+        for n in names:
+            left = allowance - (clock() - began)
+            if left <= 0:
+                break
+            limit = min(per_probe, left)
+            started = clock()
+            try:
+                measure_full(exe, ["--exact", n, *extra], scratch, limit)
+                costs[n] = round(clock() - started, 3)
+            except subprocess.TimeoutExpired:
+                if limit < per_probe:
+                    break  # the allowance ended it, which shows nothing about this benchmark
+                slow[n] = round(limit, 3)
+            except (subprocess.CalledProcessError, OSError, ValueError, KeyError):
+                pass  # unprobed: stays unplanned
+    return costs, slow, clock() - began
 
 
 def rerunner(exe, args, samples, meta, positions, counters, timings=None):

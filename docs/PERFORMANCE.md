@@ -135,8 +135,8 @@ measuring time: the build before it does not count.
   so a pair group is valid whenever it is selected and need not run every push.
 - Cost per sample comes from the timings of the last runs (`.git/sub0perf/coverage/<target>.json`: the
   median wall time of each benchmark's process, which includes process start-up, and of a round's two
-  steady calibrations). With none yet, one calibration and one benchmark are timed as a cheap probe; a cold
-  single sample under-estimates, so the first plan on a machine is optimistic and the next is accurate.
+  steady calibrations). With none yet, one calibration is timed too, and every benchmark without a cost is probed as below;
+  a cold single sample under-estimates, so the first plan on a machine is optimistic and the next is accurate.
 - **Always measured: 2 controls**, the cheapest hand-written references that the baseline does not know to be
   bimodal (the same exclusion the judge applies). Two is the least that lets one disagree with the other,
   and absolute verdicts need the environment correction they give. They run for 3 rounds, the least that
@@ -149,8 +149,17 @@ measuring time: the build before it does not count.
   its stalest member's); ties are broken by a hash of the commit and the group, so the choice for a
   commit is repeatable and differs between commits. A group too expensive for the space left is skipped
   and stays stalest, and cheaper ones fill the rest.
-- If the stalest group alone does not fit beside the controls, it is **measured alone** (otherwise cheaper
-  groups would keep it waiting for ever) and the overrun is stated.
+- If the stalest group alone does not fit beside the controls but fits the whole budget, it is **measured
+  alone** (otherwise cheaper groups would keep it waiting for ever) and the overrun is stated. A group that
+  would cost more than the whole budget beside the controls is **not measured yet**: it is listed in the plan
+  and left to the full level, since quick promises its time.
+- **Benchmarks with no recorded cost** (new ones) are timed first, one sample each, before anything is
+  planned: a sample is cut off after a tenth of the budget and all such probes together take at most a fifth
+  of it, and their time counts against the budget. A benchmark that hits the cut-off is recorded as `slow` in
+  the coverage file and, like one the allowance did not reach, is not planned at quick (it has no baseline, so
+  it cannot regress; the full level measures it and clears the mark). On 2026-11-03 eight new whole-run
+  benchmarks, never measured and costed at the median of the others, were all planned first, 3 rounds of
+  minutes per sample each; the gate ran 58 minutes instead of 90 s.
 - The gate prints what it will do and the coverage it gives, for example `plan: 14/30 benchmarks x 3
   rounds, estimated 66 s of a 90 s budget`, `controls, always: 2 hand-written reference(s) (...); groups this
   push: 6 of 22`, `coverage: measured 14/30 now; every group is covered within 4 push(es)`, `stalest after

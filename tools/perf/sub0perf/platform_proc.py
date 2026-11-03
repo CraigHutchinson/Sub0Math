@@ -25,25 +25,31 @@ def resolve_pin_cpu(option):
     return (os.cpu_count() or 1) - 1 if option == -1 else option
 
 
-def launch(cmd):
+def launch(cmd, timeout=None):
     """Starts a measurement process at raised priority, pinned to the pin CPU when set, and waits for it.
 
     Pinning stops the scheduler moving the benchmark between cores mid-run (cold caches, different clocks);
-    raised priority keeps ordinary background work from preempting it.
+    raised priority keeps ordinary background work from preempting it. With `timeout` (seconds) a process still running
+    after that long is killed and subprocess.TimeoutExpired is raised.
     """
     if sys.platform == "win32":
         high_priority = 0x00000080  # HIGH_PRIORITY_CLASS
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=high_priority)
         if _pin_cpu is not None:
             ctypes.windll.kernel32.SetProcessAffinityMask(int(proc._handle), ctypes.c_size_t(1 << _pin_cpu))
-        code = proc.wait()
+        try:
+            code = proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
     else:
         cpu = _pin_cpu
 
         def pin():
             if cpu is not None and hasattr(os, "sched_setaffinity"):
                 os.sched_setaffinity(0, {cpu})
-        code = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=pin).returncode
+        code = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=pin, timeout=timeout).returncode
     if code != 0:
         raise subprocess.CalledProcessError(code, cmd)
 
