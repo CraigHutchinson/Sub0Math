@@ -67,3 +67,10 @@ class GateRefusalTest(RepoTestCase):
         (self.repo / "f.txt").write_text("two", encoding="utf-8")
         self.assertEqual(self.gate(self.push("0" * 40)), 0)
 
+    def test_nothing_pushed_measures_nothing(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.gate(""), 0)  # git runs the hook with no refs when everything is up to date
+        self.assertIn("nothing is pushed", out.getvalue())

@@ -76,7 +76,10 @@ def gate_command(args):
     head = git_head(repo)
     clean = tree_clean(repo)
     if args.refs_from_stdin:  # a push: what is measured must be what is pushed
-        if refs and all(set(r[1]) == ZERO_SHA_CHARS for r in refs):
+        if not refs:
+            print("sub0perf: nothing is pushed (everything up to date); nothing to measure")
+            return 0
+        if all(set(r[1]) == ZERO_SHA_CHARS for r in refs):
             print("sub0perf: only deletions are pushed; nothing to measure")
             return 0
         problems = push_problems(refs, head, clean, lambda sha: git(repo, "rev-parse", f"{sha}^{{commit}}") or sha)
