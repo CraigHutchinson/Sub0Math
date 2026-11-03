@@ -178,11 +178,11 @@ def measure_and_judge(args):
         args.subset = len(names) < len(list_names(args.exe, ""))
     budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)
     samples, meta, positions, counters = measure_all(args.exe, args, names=names, rounds=rounds, timings=timings)
-    state = getattr(args, "power_state", None) or power.power_state()
-    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, state)
-    if state.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY
+    now = getattr(args, "power_state", None) or power.power_state()  # (`state` above is the coverage state)
+    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, now)
+    if now.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY
         record["power_override"] = True
-        print(f"sub0perf: {power.override_text(state)}")
+        print(f"sub0perf: {power.override_text(now)}")
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total (a quick run only while the budget allows).
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate_with(record, args.baseline, args, bool(args.filter))

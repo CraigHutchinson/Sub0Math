@@ -243,6 +243,44 @@ class GateTest(RepoTestCase):
         self.assertIn("on battery", out)
 
 
+class AutoCommandTest(unittest.TestCase):
+    """The after-build `auto` path: the speed state reaches the record, and does not shadow the coverage state (a crash once)."""
+
+    def run_auto(self, ratio, **env):
+        from ..runner import list_names  # noqa: F401  (the module imports it inside measure_and_judge)
+        rec = record({"A": 100, "B": 100, "C": 100})
+        args = types.SimpleNamespace(exe="e", baseline="b", target=None, repo=None, report_only=True, lock_timeout=1.0, level="quick",
+                                     budget=None, rounds=3, max_rounds=3, filter="", epochs=0, seed=1, out=None, record=False,
+                                     confirm_rounds=0, tolerance=0.1, pair_tolerance=0.05, instr_tolerance=0.02, max_cv=0.05,
+                                     absolute=False, max_load=0.2, settle=0.0, subset=False)
+        env = {power.FAKE_VAR: "ac", speed.FAKE_VAR: str(ratio), **env}
+        measured = (rec["samples"], rec["rounds"], rec["positions"], rec["counters"])
+        with mock.patch.dict(os.environ, env), mock.patch.object(cli, "measure_all", return_value=measured),                 mock.patch("sub0perf.runner.list_names", return_value=["A", "B", "C"]),                 mock.patch.object(cli, "choose_benchmarks", return_value=(["A", "B", "C"], 3, 0.0)):
+            return captured(cli.auto_command, args)
+
+    def test_a_throttled_machine_defers_the_after_build_check(self):
+        code, out = self.run_auto(1.9)
+        self.assertEqual(code, 0)
+        self.assertIn("machine throttled", out)
+        self.assertIn("performance not measured", out)
+
+    def test_a_normal_speed_measures_and_the_record_carries_the_ratio(self):
+        seen = []
+        with mock.patch.object(cli, "report", side_effect=lambda rec, args: seen.append(rec) or ([], [], [])):
+            code, out = self.run_auto(1.02)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen[0]["power"]["speed_ratio"], 1.02)
+        self.assertNotIn("power_override", seen[0])
+
+    def test_the_override_flags_the_record(self):
+        seen = []
+        with mock.patch.object(cli, "report", side_effect=lambda rec, args: seen.append(rec) or ([], [], [])):
+            code, out = self.run_auto(1.9, **{power.OVERRIDE_VAR: "1"})
+        self.assertTrue(seen[0]["power_override"])
+        self.assertTrue(seen[0]["power"]["throttled"])
+        self.assertIn("measuring on a throttled machine", out)
+
+
 class PowerCommandTest(unittest.TestCase):
     def test_the_power_command_reports_a_throttled_machine_with_exit_3(self):
         args = types.SimpleNamespace(exe="e", baseline="b", target=None, repo=None)
