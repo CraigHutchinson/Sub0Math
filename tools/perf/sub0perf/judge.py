@@ -3,6 +3,7 @@
 import statistics
 from pathlib import Path
 
+from . import power
 from .baseline import baseline_tuple
 from .common import REFERENCE_MARK, read_json
 from .stats import pair_ratios, summarise
@@ -187,13 +188,17 @@ def evaluate(record, baseline, tolerance, pair_tolerance, max_cv, absolute, filt
             return "unpinned" if cpu is None else cpu
         method_notes.append(f"pinned CPU differs (now {shown(record['cpu'])}, baseline {shown(base_data['cpu'])};"
                             f" cores of a hybrid CPU differ in speed)")
+    if power.key(record.get("power")) != power.key(base_data.get("power")):  # an absent field is ac, so old baselines judge as before
+        method_notes.append(f"power state differs (now {power.label(record.get('power'))}, baseline {power.label(base_data.get('power'))};"
+                            f" CPU clocks, boost and the power plan differ)")
     env = {"method": None if not method_notes else
            "; ".join(method_notes) + ": absolute times are not like for like; pair ratios still are",
            "rounds": len(record["rounds"]), "busy_rounds": sum(1 for r in record["rounds"] if not r["quiet"]),
            "max_load": max((r["load"] for r in record["rounds"]), default=0.0), "calibration_ns": cal,
            "calibration_cv": cal_cv, "clock_drift": cal_drift, "mode": mode, "baseline": have_baseline,
            "counter_rows": counter_rows, "instr_tolerance": instr_tolerance, "environment_shift": environment_shift,
-           "tolerance": tolerance, "suite_spread": suite_spread}
+           "tolerance": tolerance, "suite_spread": suite_spread,
+           "power": record.get("power"), "power_override": bool(record.get("power_override"))}
     if method_notes:  # absolute times measured differently cannot support a verdict either way
         rows = _inconclusive(rows)
     return rows, pair_rows, env

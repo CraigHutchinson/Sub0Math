@@ -226,6 +226,9 @@ It prints a table of PASS, WARN and FAIL rows and exits 1 on any FAIL. Consumers
 | `gate: empty stdin`, `deletion only`, `docs-only range` | The real `gate_command` skips each, with synthetic refs |
 | `gate: code range` | The gate plans a measuring run, and the quick plan's predicted seconds plus the probe allowance (a fifth of the budget while any benchmark has no recorded cost) fit the budget, from the repository's real coverage state |
 | `coverage <name>` | Always reported: benchmarks with no recorded cost (unknown), probed too slow (full level only), groups deferred, pushes to cover every group, the stalest group. A WARN while any is unknown or slow |
+| `gate power: ...` | With the power state faked (`SUB0PERF_FAKE_POWER`): battery and a battery saver defer, strict mode fails, `SUB0MATH_PERF_ON_BATTERY=1` and unknown power measure; each deferral names the override |
+| `baseline power: ...` | Mains, old (no field) and unknown records may become a baseline; battery and override runs may not |
+| `power now` | Always reported; a WARN on battery ("the gate would defer, measuring nothing") |
 | `lock` | No stale `.git/sub0perf/lock` (a live one is a WARN) |
 
 The decisions are the gate's own code, not a copy: `gate_command` has a **plan-only mode** (`args.plan_only`) that
@@ -235,6 +238,37 @@ log, or care about a dirty tree or `SUB0MATH_PERF_SKIP`, and `args.changed_paths
 range (the selftest injects a docs-only list and a code list). The benchmark names come from the baseline and the
 coverage state, since listing them would run the benchmark executable. `choose_benchmarks` and the preview share
 `make_quick_plan`, so the plan is the one a real quick gate makes.
+
+### Power state
+
+Timing on battery is not a fair comparison with a baseline recorded on mains: CPU clocks, boost and the power plan all
+differ, and the run burns battery for a verdict nobody can trust. `sub0perf/power.py` reads the state (`ac`, `battery` or
+`unknown`, plus whether a battery saver or low-power mode is on): `GetSystemPowerStatus` on Windows (the active power
+plan is reported too), `/sys/class/power_supply` on Linux (no battery means mains), `pmset` on macOS. `unknown` (a
+desktop, a runner, a failed query) counts as mains but is reported as unknown. `bench_check.py power` prints the state and
+the switches in effect (exit 3 on battery).
+
+- **Deferral (default).** After the empty-push and documentation-only skips, and before building or measuring, a gate on
+  battery (or in a saver) prints `on battery: performance not measured (deferred; ...)` with how to override, and exits 0.
+  The baseline and the coverage state are not touched, so the stalest-first rotation resumes where it stopped. The pushed
+  ranges go to `.git/sub0perf/deferred.json`; the next gate on mains lists them, and if it blocks it says the regression
+  may come from any of them. They are cleared by a clean measurement on mains. Nothing maps a changed file to the
+  benchmarks it affects, so deferred pushes do not reorder the rotation. `SUB0MATH_PERF_LEVEL=full` covers everything.
+- **Strict.** `SUB0MATH_PERF_POWER_STRICT=1`, or `"strict_power": true` in `.git/sub0perf/config.json`, refuses the push
+  instead (exit 1). Off by default.
+- **Override.** `SUB0MATH_PERF_ON_BATTERY=1` measures anyway. The first line of the run and the last line of the summary say
+  so, the record carries `"power": {"state": "battery", ...}` and `"power_override": true`, the report shows it, and such a
+  record can never become a baseline. Set on mains it is reported as "set but ignored (on mains)", so a stale export is noticed.
+- **Mid-run.** Power is checked before every round (including confirmation rounds). A switch to battery stops the run: the
+  measurements are discarded (no verdicts, no record), the push is deferred like any other, and the range is marked
+  "stopped mid-run".
+- **Records.** Every samples record and baseline carries `power`. `baseline` and `accept` refuse a record measured on
+  battery or in a saver; `--force-power` allows one made by hand, never one measured under the override. `unknown` is
+  allowed and says so. A baseline without the field is mains. When the record's power state (battery, saver) differs from
+  the baseline's, absolute verdicts become ENVIRONMENT (inconclusive); pair ratios and instruction counts still judge.
+- **Tests only.** `SUB0PERF_FAKE_POWER=ac|battery|unknown|saver` replaces the query; outside tests the gate warns that the
+  power state is being faked. The decision tests and `selftest` use it.
+- **After-build check.** The `auto` run after a build defers on battery the same way (it is a measurement too).
 
 ### Pre-push gate and explicit acceptance
 
@@ -341,6 +375,7 @@ package, lowest layer first:
 | `common` | Constants (`CALIBRATION`, `REFERENCE_MARK`), `group_of`, `read_json`, `atomic_write_text`, `tooling_script` |
 | `platform_proc` | CPU pinning and priority, launching a measurement, machine CPU time counters, `pid_alive` |
 | `load` | System load sampling, waiting for a quiet machine |
+| `power`, `deferral` | The power state (`power_state`, the gate's policy and messages); pushes deferred on battery |
 | `stats` | Robust CV, bimodal detection (`modes`, `rounds_needed`), calibration-scaled medians (`summarise`), `pair_ratios` |
 | `baseline` | The two file formats: samples record (`make_record`, `write_samples`) and baseline (`baseline_data`, `baseline_tuple`, `write_baseline`) |
 | `gitstate` | `git`, HEAD, clean tree, `.git/sub0perf` (records, log), pushed refs, documentation-only pushes |

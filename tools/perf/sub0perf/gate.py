@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .baseline import baseline_data, make_record
-from . import levels, plan as planning
+from . import deferral, levels, plan as planning, power
 from .common import REFERENCE_MARK, group_of, read_json, tooling_script
 from .confirm import confirm_regressions, inconclusive_in, retry_inconclusive
 from .gitstate import (ZERO_SHA_CHARS, accepted_since, changed_paths_between, documentation_only, git, git_head, log_event,
@@ -16,7 +16,7 @@ from .lock import LockTimeout, PerfLock
 from .pins import pin_problems, show_file_at
 from .report import render, report
 from .reproduce import reproduced_against
-from .runner import list_names, measure_all, probe_cost, probe_unknown, rerunner
+from .runner import PowerChanged, list_names, measure_all, probe_cost, probe_unknown, rerunner, set_round_guard
 from .stats import rounds_needed
 
 
@@ -108,16 +108,52 @@ def gate_command(args):
             log({"event": "skip", "commit": head, "reason": "documentation only"})
             args.outcome = "skip-docs"
             return 0
+    pol, state = power.policy(config=config), power.power_state()
+    for note in power.environment_notes(state, pol):
+        print(note)
+    if state.untrusted and not pol.override:  # before any build or measuring: a battery timing is not comparable with the baseline
+        print(power.deferral_text(state, pol.strict))
+        if not plan_only:
+            if not pol.strict:
+                deferral.add(d, head, refs, state.reason())
+            log({"event": "power-refused" if pol.strict else "power-deferred", "commit": head, "power": state.as_dict()})
+        args.outcome = "refused-power" if pol.strict else "defer-power"
+        return 1 if pol.strict else 0
+    args.power_state, args.power_policy = state, pol
     if plan_only:
         args.outcome = "measure"
         args.previews = preview_targets(args, repo, d, config, head)
         return 0
+    if not pol.override:
+        set_round_guard(power_guard)
     try:
         with PerfLock(repo, "gate", args.lock_timeout):
             return run_gate(args, repo, d, config_path, head, clean)
     except LockTimeout as e:
         print(f"sub0perf: {e}; push blocked")
         return 1
+    except PowerChanged as changed:
+        return stopped_by_power(changed.args[0], pol, repo, d, head, refs, log)
+    finally:
+        set_round_guard(None)
+
+
+def power_guard():
+    """Called before every round of a gate run: stops the run when the machine has gone on battery since it began."""
+    now = power.power_state()
+    if now.untrusted:
+        raise PowerChanged(now)
+
+
+def stopped_by_power(now, pol, repo, d, head, refs, log):
+    """Exit code after the power state changed mid-run: the run is inconclusive and nothing it measured is kept or judged."""
+    print(f"\nsub0perf: the power state changed during the run ({now.reason()}); the measurements are "
+          f"inconclusive and are discarded (no verdicts, no record, baseline untouched)")
+    print(power.deferral_text(now, pol.strict))
+    if not pol.strict:
+        deferral.add(d, head, refs, now.reason(), partial=True)
+    log({"event": "power-stopped", "commit": head, "power": now.as_dict(), "strict": pol.strict})
+    return 1 if pol.strict else 0
 
 
 def probe_unknown_costs(exe, args, state, all_names):
@@ -204,6 +240,10 @@ def run_gate(args, repo, d, config_path, head, clean):
     config = read_json(config_path)
     upstream = git(repo, "rev-parse", "@{upstream}")
     blocked = []
+    state, pol = args.power_state, args.power_policy
+    pending = deferral.load(d)
+    for line in deferral.describe(pending):
+        print(line)
     for target, t in config.get("targets", {}).items():
         print(f"sub0perf: pre-push gate for {target} at {head[:9]}{'' if clean else ' (working tree has uncommitted changes)'}")
         command = ["cmake", "--build", t["build_dir"], "--target", target] + (["--config", t["config"]] if t.get("config") else [])
@@ -224,8 +264,10 @@ def run_gate(args, repo, d, config_path, head, clean):
         # Measuring time, probing included; the build above does not count.
         budget = planning.Budget(max(args.budget_seconds - probed_s, 0.0) if args.budget_seconds else args.budget_seconds)
         samples, meta, positions, counters = measure_all(exe, args, names=chosen, rounds=rounds, timings=timings)
-        record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed)
+        record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed, state)
         record["level"] = args.level
+        if state.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY: never a baseline, and every report says so
+            record["power_override"] = True
         record["unmeasured"] = sorted(set(all_names) - set(chosen))
         args.baseline = t["baseline"]
         ref_sha, ref = reference_record(repo, target, upstream)
@@ -308,8 +350,16 @@ def run_gate(args, repo, d, config_path, head, clean):
             print("  (recorded in the local record and log; re-run the check on a quieter machine to judge them)")
         log_event(repo, {"event": "gate", "target": target, "commit": head, "reference": ref_sha,
                          "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted, "unreproduced_vs_record": unreproduced,
-                         "inconclusive": inconclusive, "seed": args.seed, "level": args.level,
+                         "inconclusive": inconclusive, "power": state.as_dict(), "power_override": state.untrusted, "seed": args.seed, "level": args.level,
                          "measured": len(chosen), "benchmarks": len(all_names), "seconds": round(measured_s, 1)})
+    if blocked and pending:
+        print("\nsub0perf: the push is blocked by a regression; earlier pushes were not measured, so it may come from any of them:")
+        for line in deferral.describe(pending)[1:]:
+            print(line)
+    elif not blocked and not state.untrusted:
+        deferral.clear(d)  # measured on mains and fine: the unmeasured range is covered
+    if state.untrusted:  # repeated at the end, where the verdict is read
+        print(f"\nsub0perf: {power.OVERRIDE_TEXT}")
     return 1 if blocked else 0
 
 

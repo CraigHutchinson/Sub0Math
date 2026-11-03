@@ -4,14 +4,18 @@ import json
 import platform
 from pathlib import Path
 
-from . import platform_proc
+from . import platform_proc, power
 from .common import atomic_write_text
 from .stats import pair_ratios, summarise
 
 
-def make_record(exe, samples, meta, positions, counters, epochs=0, seed=None):
-    """The one samples record written by run, auto and gate (format 2; `seed` is the shuffle seed of the rounds)."""
-    return {"format": 2, "exe": Path(exe).name, "epochs": epochs, "cpu": platform_proc.pin_cpu(), "seed": seed,
+def make_record(exe, samples, meta, positions, counters, epochs=0, seed=None, state=None):
+    """The one samples record written by run, auto and gate (format 2; `seed` is the shuffle seed of the rounds).
+
+    `power` is the power state it was measured in (read now unless `state`, a power.PowerState, is given).
+    """
+    return {"format": 2, "exe": Path(exe).name, "power": (state or power.power_state()).as_dict(), "epochs": epochs,
+            "cpu": platform_proc.pin_cpu(), "seed": seed,
             "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
             "system": f"{platform.system()} {platform.release()}",
             "rounds": meta, "samples": samples, "positions": positions}
@@ -37,6 +41,7 @@ def baseline_data(record):
             "system": record.get("system", f"{platform.system()} {platform.release()}"),
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
+            **({"power": record["power"]} if "power" in record else {}),
             "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0), "cpu": record.get("cpu"),
             "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"],
                                **({"modes": [round(s["modes"][0], 3), round(s["modes"][1], 3)]} if s["modes"] else {}),

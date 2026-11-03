@@ -22,7 +22,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import gate, hooks, levels, plan as planning
+from . import accept, deferral, gate, hooks, levels, plan as planning, power
 from .common import read_json, tooling_script
 from .gitstate import git, git_head, perf_dir
 from .lock import PerfLock
@@ -170,14 +170,33 @@ def check_settings(config):
     return rows
 
 
-def drive(repo, refs_text, changed_paths, budget):
-    """Runs the real gate_command in plan-only mode on synthetic refs. Returns (exit code, outcome, previews, output)."""
+@contextlib.contextmanager
+def faked_power(fake, **switches):
+    """The environment of a decision test: the power state faked as `fake` and only the given switches set (the real ones do not leak in)."""
+    names = (power.FAKE_VAR, power.OVERRIDE_VAR, power.STRICT_VAR)
+    saved = {n: os.environ.pop(n, None) for n in names}
+    os.environ[power.FAKE_VAR] = fake
+    os.environ.update(switches)
+    try:
+        yield
+    finally:
+        for n in names:
+            os.environ.pop(n, None)
+            if saved[n] is not None:
+                os.environ[n] = saved[n]
+
+
+def drive(repo, refs_text, changed_paths, budget, fake="ac", **switches):
+    """Runs the real gate_command in plan-only mode on synthetic refs. Returns (exit code, outcome, previews, output).
+
+    The power state is faked (mains unless told otherwise), so a decision test gives the same answer on battery.
+    """
     args = types.SimpleNamespace(repo=str(repo), refs_from_stdin=True, plan_only=True, changed_paths=changed_paths, lock_timeout=1.0,
                                  level="quick", budget=budget, rounds=3)
     real, out = sys.stdin, io.StringIO()
     sys.stdin = io.StringIO(refs_text)
     try:
-        with contextlib.redirect_stdout(out):
+        with faked_power(fake, **switches), contextlib.redirect_stdout(out):
             code = gate.gate_command(args)
     finally:
         sys.stdin = real
@@ -215,6 +234,56 @@ def check_decisions(repo, config, d, budget):
         return rows + [(FAIL, "gate: code range", f"expected a measuring run, got {outcome or 'no decision'} and exit {code}")]
     for p in previews:
         rows += describe_preview(p)
+    return rows + check_power_decisions(repo, update, budget)
+
+
+def check_power_decisions(repo, update, budget):
+    """The gate's power decisions, with the power state faked: battery defers (and does not build), strict refuses, the override
+    and unknown measure. All plan-only: nothing is built, measured, logged or deferred."""
+    code_paths = lambda r, l: ["include/Example.hpp"]
+    rows = []
+    for label, fake, switches, want, want_code in (
+            ("battery defers", "battery", {}, "defer-power", 0),
+            ("battery saver defers", "saver", {}, "defer-power", 0),
+            ("battery in strict mode fails", "battery", {power.STRICT_VAR: "1"}, "refused-power", 1),
+            ("battery with the override measures", "battery", {power.OVERRIDE_VAR: "1"}, "measure", 0),
+            ("unknown power measures", "unknown", {}, "measure", 0)):
+        try:
+            code, outcome, _, output = drive(repo, update, code_paths, budget, fake, **switches)
+        except Exception as error:
+            rows.append((FAIL, f"gate power: {label}", f"crashed: {type(error).__name__}: {error}"))
+            continue
+        hint = power.OVERRIDE_VAR in output if want != "measure" else True
+        ok = outcome == want and code == want_code and hint
+        rows.append((PASS if ok else FAIL, f"gate power: {label}",
+                     f"{outcome}, exit {code}" + (", names the override" if want != "measure" else "") if ok
+                     else f"expected {want} and exit {want_code} (naming the override), got {outcome or 'no decision'}, exit {code}"))
+    rows += check_power_records()
+    state = power.power_state()
+    rows.append((WARN if state.untrusted else PASS, "power now",
+                 f"{power.describe(state)}: " + ("the gate would defer, measuring nothing" if state.untrusted else "the gate measures")
+                 + (f"; {len(deferral.load(perf_dir(repo)))} unmeasured push(es) pending" if deferral.load(perf_dir(repo)) else "")))
+    return rows
+
+
+def check_power_records():
+    """What may become a baseline, from synthetic records: mains and old (no field) records yes, unknown yes (said so),
+    battery no, an override run never."""
+    rows = []
+    quiet = io.StringIO()
+    for label, record, want_refused in (
+            ("mains record is accepted", {"power": {"state": "ac", "saver": False}}, False),
+            ("record without the field is accepted (ac)", {}, False),
+            ("unknown power is accepted (and said so)", {"power": {"state": "unknown"}}, False),
+            ("battery record is refused", {"power": {"state": "battery"}}, True),
+            ("override run is refused", {"power": {"state": "battery"}, "power_override": True}, True)):
+        with contextlib.redirect_stdout(quiet):
+            refused = accept.power_refusal(record, "selftest", force=False)
+        rows.append((PASS if refused == want_refused else FAIL, f"baseline power: {label}",
+                     "refused" if refused else "accepted"))
+    with contextlib.redirect_stdout(quiet):
+        forced = accept.power_refusal({"power": {"state": "battery"}, "power_override": True}, "selftest", force=True)
+    rows.append((PASS if forced else FAIL, "baseline power: --force-power never allows an override run", "refused" if forced else "accepted"))
     return rows
 
 

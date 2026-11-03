@@ -62,6 +62,18 @@ def steady_calibration(read):
     return previous
 
 
+class PowerChanged(Exception):
+    """The machine went on battery (or into a battery saver) during a run: what was measured is inconclusive."""
+
+
+_round_guard = None  # called before every round; raises PowerChanged (see gate.py). Like the pin CPU, set once per command.
+
+
+def set_round_guard(guard):
+    global _round_guard
+    _round_guard = guard
+
+
 def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0, samples=None, meta=None, positions=None,
                counters=None, timings=None):
     """Interleaved rounds. `timings`, when given ({"bench": {name: [seconds]}, "overhead": [seconds]}), collects the wall time of
@@ -76,6 +88,8 @@ def run_rounds(exe, names, rounds, epochs, max_load, settle, seed, first_round=0
         groups.setdefault(group_of(n), []).append(n)
     with tempfile.TemporaryDirectory() as scratch:
         for r in range(first_round, first_round + rounds):
+            if _round_guard:
+                _round_guard()
             rng = random.Random(seed * 1000003 + r)
             load, waited, quiet = wait_for_quiet(max_load, settle)
             began = time.monotonic()

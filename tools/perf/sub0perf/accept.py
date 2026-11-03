@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from .baseline import baseline_data, write_baseline
+from . import power
 from .common import read_json
 from .gitstate import git_head
 from .judge import evaluate_with, names_with
@@ -33,9 +34,32 @@ def unsteady(record, source):
     return False
 
 
+def power_refusal(record, source, force=False):
+    """Prints why and returns True when the record's power state rules it out as a baseline.
+
+    A run measured on battery (or in a battery saver) is refused; `--force-power` allows one made by hand (`run`), never one
+    the gate measured under SUB0MATH_PERF_ON_BATTERY (flagged `power_override`). `unknown` is allowed, and said so.
+    A record without the field (made before it existed) counts as ac.
+    """
+    info = record.get("power")
+    if record.get("power_override"):
+        print(f"bench_check: {source} was measured under {power.OVERRIDE_VAR}=1 (power: {power.label(info)}); it can never become a baseline")
+        return True
+    if power.key(info) != (power.AC, False):
+        if force:
+            print(f"bench_check: WARNING: recording a baseline from a run measured on {power.label(info)} (--force-power)")
+            return False
+        print(f"bench_check: {source} was measured on {power.label(info)}, where clocks and boost differ from mains; it cannot become a "
+              f"baseline. Re-measure on mains (--force-power overrides, for a run made by hand)")
+        return True
+    if (info or {}).get("state") == power.UNKNOWN:
+        print(f"bench_check: note: the power state of {source} is unknown; it is accepted as mains")
+    return False
+
+
 def baseline_command(args):
     record = read_json(args.results)
-    if unsteady(record, args.results):
+    if power_refusal(record, args.results, getattr(args, "force_power", False)) or unsteady(record, args.results):
         return 2
     data = baseline_data(record)
     path = Path(args.baseline)
@@ -80,7 +104,7 @@ def accept_command(args):
         print(f"bench_check: no measured samples in {args.results} for: {', '.join(empty)}\n"
               f"  measure them first, e.g. `run --exe ... --filter \"<name or group>\" --out samples.json`, then accept from that file")
         return 2
-    if unsteady(record, args.results):
+    if power_refusal(record, args.results, getattr(args, "force_power", False)) or unsteady(record, args.results):
         return 2
     scale = (data.get("calibration_ns") or fresh["calibration_ns"]) / fresh["calibration_ns"]
     changes = {}

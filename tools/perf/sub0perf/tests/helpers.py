@@ -3,8 +3,10 @@
 import random
 import subprocess
 import tempfile
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ..baseline import baseline_data
 from ..judge import evaluate
@@ -36,6 +38,12 @@ def git_run(repo, *args):
 
 class RepoTestCase(unittest.TestCase):
     def setUp(self):
+        # Decisions must not depend on the host being on battery: tests fake mains unless they set the power state themselves.
+        patch = mock.patch.dict(os.environ, {"SUB0PERF_FAKE_POWER": "ac"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ("SUB0MATH_PERF_ON_BATTERY", "SUB0MATH_PERF_POWER_STRICT"):
+            os.environ.pop(name, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "my repo"  # with a space, as users have

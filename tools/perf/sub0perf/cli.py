@@ -79,23 +79,36 @@ import contextlib
 import os
 from pathlib import Path
 
-from . import levels, platform_proc, plan as planning
+from . import levels, platform_proc, plan as planning, power
 from .accept import accept_command, baseline_command
 from .baseline import make_record, write_samples
 from .common import read_json
 from .confirm import confirm_regressions, noisy_names
-from .gate import choose_benchmarks, gate_command
+from .gate import choose_benchmarks, gate_command, power_guard
 from .gitstate import git_head, perf_dir, save_record, tree_clean
 from .hooks import install_hooks_command, note_checkout_command
 from .judge import evaluate_with
 from .lock import LockTimeout, PerfLock
 from .report import report
 from .selftest import selftest_command
-from .runner import fill_unmeasured, measure_all, rerunner, run_rounds
+from .runner import PowerChanged, fill_unmeasured, measure_all, rerunner, run_rounds, set_round_guard
 from .stats import rounds_needed
 
 
+def power_command(args):
+    """Prints the power state (and the switches in effect); exit 0 when timings are trustworthy, 3 on battery or in a saver."""
+    state = power.power_state()
+    print(f"sub0perf: power: {power.describe(state)}")
+    for note in power.environment_notes(state, power.policy()):
+        print(note)
+    return 3 if state.untrusted else 0
+
+
 def run_command(args):
+    state = power.power_state()
+    if state.untrusted:
+        print(f"sub0perf: WARNING: measuring {state.reason()}; the record carries the power state, and cannot become a baseline "
+              f"without --force-power")
     samples, meta, positions, counters = measure_all(args.exe, args)
     write_samples(args.out, make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed))
     return 0
@@ -110,12 +123,24 @@ def check_command(args):
 def auto_command(args):
     if os.environ.get("SUB0MATH_PERF_SKIP"):
         return 0  # the gate builds benchmarks itself and measures them once
+    state, pol = power.power_state(), power.policy()
+    for note in power.environment_notes(state, pol):
+        print(note)
+    if state.untrusted and not pol.override:  # the after-build check burns battery for a verdict that cannot be trusted
+        print(power.deferral_text(state, False).replace("the next push on mains measures", "the next gate run on mains measures"))
+        return 0
+    set_round_guard(None if pol.override else power_guard)
     try:
         with PerfLock(Path(args.repo), "auto", args.lock_timeout) if args.repo else contextlib.nullcontext():
             return measure_and_judge(args)
     except LockTimeout as e:
         print(f"sub0perf: {e}")
         return 0 if args.report_only else 1
+    except PowerChanged as changed:
+        print(f"sub0perf: the power state changed during the run ({changed.args[0].reason()}); inconclusive, nothing judged or kept")
+        return 0
+    finally:
+        set_round_guard(None)
 
 
 def measure_and_judge(args):
@@ -137,6 +162,9 @@ def measure_and_judge(args):
     budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)
     samples, meta, positions, counters = measure_all(args.exe, args, names=names, rounds=rounds, timings=timings)
     record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed)
+    if power.power_state().untrusted:  # only under SUB0MATH_PERF_ON_BATTERY
+        record["power_override"] = True
+        print(f"sub0perf: {power.OVERRIDE_TEXT}")
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total (a quick run only while the budget allows).
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate_with(record, args.baseline, args, bool(args.filter))
@@ -166,12 +194,14 @@ def measure_and_judge(args):
     if budget.overrun():
         print(f"sub0perf: the time budget was exceeded by {budget.overrun():.0f} s")
     _, _, regressed = report(record, args)
+    if record.get("power_override"):
+        print(f"\nsub0perf: {power.OVERRIDE_TEXT}")
     return 0 if args.report_only or not regressed else 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout", "selftest"])
+    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout", "selftest", "power"])
     parser.add_argument("--exe", help="benchmark executable (run, auto)")
     parser.add_argument("--out", help="samples file to write (run; optional for auto)")
     parser.add_argument("--results", help="samples file from `run` (check, baseline)")
@@ -209,6 +239,8 @@ def main():
     parser.add_argument("--reason", help="why a baseline is re-recorded or a change accepted (logged in the file)")
     parser.add_argument("--benchmark", nargs="+", default=[], help="accept: benchmarks to move to the new measurement")
     parser.add_argument("--all-changed", action="store_true", help="accept: every regressed or improved benchmark")
+    parser.add_argument("--force-power", action="store_true",
+                        help="baseline, accept: allow a record measured by hand on battery (never one measured under SUB0MATH_PERF_ON_BATTERY)")
     parser.add_argument("--record", action="store_true", help="auto: keep a clean tree's measurement as its commit's record")
     parser.add_argument("--repo", help="git repository (auto --record, gate, install-hooks, selftest)")
     parser.add_argument("--target", help="benchmark target name (auto --record, install-hooks; selftest: check just this target)")
@@ -224,7 +256,7 @@ def main():
         args.max_rounds = args.rounds * 2
     needs = {"run": ["exe", "out"], "check": ["results", "baseline"], "baseline": ["results", "baseline"], "auto": ["exe", "baseline"],
              "accept": ["results", "baseline", "reason"], "gate": [], "install-hooks": ["repo", "build_dir", "target", "exe", "baseline"],
-             "note-checkout": [], "selftest": []}
+             "note-checkout": [], "selftest": [], "power": []}
     if args.command == "accept" and not args.reason:
         args.reason = os.environ.get("SUB0MATH_PERF_REASON")
     missing = [f"--{k.replace('_', '-')}" for k in needs[args.command] if not getattr(args, k)]
@@ -239,5 +271,5 @@ def main():
         # Same method as baselines and records (default epochs), so absolute times compare like for like.
     commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
                 "accept": accept_command, "gate": gate_command, "install-hooks": install_hooks_command,
-                "note-checkout": note_checkout_command, "selftest": selftest_command}
+                "note-checkout": note_checkout_command, "selftest": selftest_command, "power": power_command}
     return commands[args.command](args)

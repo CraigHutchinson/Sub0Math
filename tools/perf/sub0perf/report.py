@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+from . import power
 from .judge import evaluate_with, verdict_hits
 
 
@@ -24,6 +25,8 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
         lines.append(f"> The environment shifted {shift:+.1%} beyond the clock between the two measurements (seen in the"
                      " controls, which do not use the library). It is factored out, but absolute verdicts are less"
                      " certain than usual; pair ratios and instruction counts are unaffected.")
+    if env.get("power_override"):
+        lines.append(f"> **{power.OVERRIDE_TEXT}**  (power: {power.label(env.get('power'))}, override: true)")
     if env.get("method"):
         lines.append(f"> Method mismatch: {env['method']}.")
     if abs(env["clock_drift"]) > 0.05:
