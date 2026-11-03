@@ -14,6 +14,8 @@ from .pins import parse_pin
 
 HOOK_MARK = "# sub0perf hook"
 PREVIOUS_SUFFIX = ".user"  # a foreign hook that was in the way is renamed to <hook>.user and run first
+HOOK_COMMENTS = {"pre-push": "performance regression gate (tools/perf/bench_check.py gate)",
+                 "post-checkout": "notes the checkout; the first clean build records its measurement"}
 
 
 def hook_body(name, python, script, comment):
@@ -76,9 +78,7 @@ def install_hooks_command(args):
     hooks.mkdir(parents=True, exist_ok=True)
     python = Path(sys.executable).as_posix()
     script = tooling_script().as_posix()
-    comments = {"pre-push": "performance regression gate (tools/perf/bench_check.py gate)",
-                "post-checkout": "notes the checkout; the first clean build records its measurement"}
-    for name, comment in comments.items():
+    for name, comment in HOOK_COMMENTS.items():
         path = hooks / name
         if path.is_file() and HOOK_MARK not in path.read_text(encoding="utf-8", errors="replace"):
             previous = hooks / (name + PREVIOUS_SUFFIX)

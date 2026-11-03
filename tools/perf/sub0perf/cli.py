@@ -90,6 +90,7 @@ from .hooks import install_hooks_command, note_checkout_command
 from .judge import evaluate_with
 from .lock import LockTimeout, PerfLock
 from .report import report
+from .selftest import selftest_command
 from .runner import fill_unmeasured, measure_all, rerunner, run_rounds
 from .stats import rounds_needed
 
@@ -170,7 +171,7 @@ def measure_and_judge(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout"])
+    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout", "selftest"])
     parser.add_argument("--exe", help="benchmark executable (run, auto)")
     parser.add_argument("--out", help="samples file to write (run; optional for auto)")
     parser.add_argument("--results", help="samples file from `run` (check, baseline)")
@@ -209,8 +210,8 @@ def main():
     parser.add_argument("--benchmark", nargs="+", default=[], help="accept: benchmarks to move to the new measurement")
     parser.add_argument("--all-changed", action="store_true", help="accept: every regressed or improved benchmark")
     parser.add_argument("--record", action="store_true", help="auto: keep a clean tree's measurement as its commit's record")
-    parser.add_argument("--repo", help="git repository (auto --record, gate, install-hooks)")
-    parser.add_argument("--target", help="benchmark target name (auto --record, install-hooks)")
+    parser.add_argument("--repo", help="git repository (auto --record, gate, install-hooks, selftest)")
+    parser.add_argument("--target", help="benchmark target name (auto --record, install-hooks; selftest: check just this target)")
     parser.add_argument("--build-dir", help="install-hooks: build directory the gate builds in")
     parser.add_argument("--pin", action="append", default=[], metavar="file=F,var=V[,repo=owner/name][,checkout=DIR][,name=N]",
                         help="install-hooks: a dependency pin (CMake `set(V <sha>)` in file F) the gate checks is on the dependency's "
@@ -223,7 +224,7 @@ def main():
         args.max_rounds = args.rounds * 2
     needs = {"run": ["exe", "out"], "check": ["results", "baseline"], "baseline": ["results", "baseline"], "auto": ["exe", "baseline"],
              "accept": ["results", "baseline", "reason"], "gate": [], "install-hooks": ["repo", "build_dir", "target", "exe", "baseline"],
-             "note-checkout": []}
+             "note-checkout": [], "selftest": []}
     if args.command == "accept" and not args.reason:
         args.reason = os.environ.get("SUB0MATH_PERF_REASON")
     missing = [f"--{k.replace('_', '-')}" for k in needs[args.command] if not getattr(args, k)]
@@ -238,5 +239,5 @@ def main():
         # Same method as baselines and records (default epochs), so absolute times compare like for like.
     commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
                 "accept": accept_command, "gate": gate_command, "install-hooks": install_hooks_command,
-                "note-checkout": note_checkout_command}
+                "note-checkout": note_checkout_command, "selftest": selftest_command}
     return commands[args.command](args)

@@ -52,6 +52,13 @@ accepted. Accepting is explicit: `accept` moves the named benchmarks' baseline t
 and appends an entry (date, commit, reason, before and after) to the baseline's `accepted` log; commit
 that file with the change. `git push --no-verify` bypasses the hook, as with any git hook.
 
+Self-test. `selftest` proves in seconds that a repository's gate is wired as intended, without building or measuring: the
+pre-push hook is installed where git looks (core.hooksPath honoured), calls an existing bench_check.py and matches what
+`install-hooks` writes (drift is reported); `.git/sub0perf/config.json`, the targets' build dirs, executables and baselines,
+and the pins are valid (an unbuilt target is a warning); the real gate, in a plan-only mode, skips empty stdin, deletions and
+documentation-only ranges and plans a quick run for a code range whose predicted seconds plus the probe allowance fit the
+budget (also reports the unknown and slow benchmarks and the stalest group); and no stale lock is left. Exit 1 on any FAIL.
+
 Confirmation. A single short measurement is not enough evidence to block. In `auto` and `gate`, anything
 judged REGRESSED on the first pass (a benchmark, a pair or a counter, against the baseline or the earlier
 record) is measured again for --confirm-rounds more rounds (default 4; calibration as usual), and the

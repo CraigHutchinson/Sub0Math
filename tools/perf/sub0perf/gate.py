@@ -56,15 +56,24 @@ def gate_command(args):
     config_path = d / "config.json" if d else None
     config = read_json(config_path) if config_path and config_path.is_file() else None
     refs = parse_push_refs(sys.stdin.read()) if getattr(args, "refs_from_stdin", False) else []
-    if config and not check_pins(repo, config, refs):
+    # plan_only (selftest): take every decision the gate takes, then stop before the pins' network check, the build and any
+    # measuring; sets args.outcome (why it stopped) and args.previews (the quick plan per target). `args.changed_paths`
+    # may replace the git diff of a pushed range; the environment bypass and the tree state are not part of a decision test.
+    plan_only = getattr(args, "plan_only", False)
+    args.outcome = ""
+    changed_paths = getattr(args, "changed_paths", None) or (lambda remote, local: changed_paths_between(repo, remote, local))
+    log = (lambda *_: None) if plan_only else (lambda event: log_event(repo, event))
+    if config and not plan_only and not check_pins(repo, config, refs):
         return 1
-    skip = os.environ.get("SUB0MATH_PERF_SKIP")
+    skip = None if plan_only else os.environ.get("SUB0MATH_PERF_SKIP")
     if skip:
         print(f"sub0perf: pre-push gate skipped (SUB0MATH_PERF_SKIP={skip})")
-        log_event(repo, {"event": "skip", "commit": git_head(repo), "reason": skip})
+        log({"event": "skip", "commit": git_head(repo), "reason": skip})
+        args.outcome = "skip-env"
         return 0
     if config is None:
         print("sub0perf: no benchmarks configured for this repository; nothing to gate")
+        args.outcome = "no-config"
         return 0
     try:
         levels.resolve(args, refs, config)
@@ -74,13 +83,15 @@ def gate_command(args):
     print(f"sub0perf: level {args.level} ({args.level_why}); "
           f"{'budget ' + format(args.budget_seconds, 'g') + ' s (' + args.budget_why + ')' if args.budget_seconds else 'no time budget'}")
     head = git_head(repo)
-    clean = tree_clean(repo)
+    clean = True if plan_only else tree_clean(repo)
     if args.refs_from_stdin:  # a push: what is measured must be what is pushed
         if not refs:
             print("sub0perf: nothing is pushed (everything up to date); nothing to measure")
+            args.outcome = "skip-empty"
             return 0
         if all(set(r[1]) == ZERO_SHA_CHARS for r in refs):
             print("sub0perf: only deletions are pushed; nothing to measure")
+            args.outcome = "skip-deletions"
             return 0
         problems = push_problems(refs, head, clean, lambda sha: git(repo, "rev-parse", f"{sha}^{{commit}}") or sha)
         if problems:
@@ -88,13 +99,19 @@ def gate_command(args):
             for problem in problems:
                 print(f"  - {problem}")
             print("  (SUB0MATH_PERF_SKIP=<reason> bypasses the gate and logs the reason; git push --no-verify skips all hooks)")
-            log_event(repo, {"event": "gate-refused", "commit": head, "problems": problems})
+            log({"event": "gate-refused", "commit": head, "problems": problems})
+            args.outcome = "refused"
             return 1
 
-        if documentation_only(refs, lambda remote, local: changed_paths_between(repo, remote, local)):
+        if documentation_only(refs, changed_paths):
             print("sub0perf: the push changes documentation only; nothing to measure")
-            log_event(repo, {"event": "skip", "commit": head, "reason": "documentation only"})
+            log({"event": "skip", "commit": head, "reason": "documentation only"})
+            args.outcome = "skip-docs"
             return 0
+    if plan_only:
+        args.outcome = "measure"
+        args.previews = preview_targets(args, repo, d, config, head)
+        return 0
     try:
         with PerfLock(repo, "gate", args.lock_timeout):
             return run_gate(args, repo, d, config_path, head, clean)
@@ -138,14 +155,49 @@ def choose_benchmarks(args, exe, target, state, head, all_names, baseline=None):
         print(f"sub0perf: quick level without a time budget: all {len(all_names)} benchmarks, {rounds} rounds")
         return all_names, rounds, 0.0
     spent = probe_unknown_costs(exe, args, state, all_names)
-    rounds = max(rounds, planning.QUICK_ROUNDS)
+    plan, rounds = make_quick_plan(args, state, head, all_names, spent, baseline)
+    for line in planning.describe_plan(plan, len(all_names), state, head):
+        print(line)
+    return plan.selected, rounds, spent
+
+
+def make_quick_plan(args, state, head, all_names, spent, baseline=None):
+    """(Plan, rounds) for a quick gate that has spent `spent` seconds probing: the part of choose_benchmarks that needs no benchmark."""
+    rounds = max(args.rounds, planning.QUICK_ROUNDS)
     known = read_json(baseline).get("benchmarks", {}) if baseline and Path(baseline).is_file() else {}
     bimodal = [n for n, b in known.items() if isinstance(b, dict) and b.get("modes")]
     plan = planning.plan_quick(all_names, state, head, max(args.budget_seconds - spent, 1.0), rounds, avoid=bimodal,
                                defer=planning.unplanned(all_names, state))
-    for line in planning.describe_plan(plan, len(all_names), state, head):
-        print(line)
-    return plan.selected, rounds, spent
+    return plan, rounds
+
+
+def probe_allowance(budget, state, all_names):
+    """The most seconds the probe of benchmarks with no recorded cost can take: its share of the budget, plus half a
+    round's calibration when nothing has been timed yet (see probe_unknown_costs). 0 when every benchmark has a cost."""
+    unknown = [n for n in all_names if n not in state["costs"] and n not in state.get("slow", {})]
+    if not unknown:
+        return 0.0
+    extra = state.get("round_overhead", planning.FALLBACK_ROUND_OVERHEAD) / 2 if not state["costs"] else 0.0
+    return budget * planning.PROBE_SHARE + extra
+
+
+def preview_targets(args, repo, d, config, head):
+    """One dict per target: the quick plan the gate would make now, from the recorded costs and coverage, without
+    building, listing, probing or measuring. The benchmark names are those the baseline and the coverage state know."""
+    previews = []
+    for target, t in config.get("targets", {}).items():
+        state = planning.load_state(d, target)
+        known = read_json(t["baseline"]).get("benchmarks", {}) if Path(t["baseline"]).is_file() else {}
+        names = sorted(set(known) | set(state["costs"]) | set(state.get("slow", {})) | set(state["benchmarks"]))
+        preview = {"target": target, "state": state, "names": names, "level": args.level, "budget": args.budget_seconds,
+                   "allowance": 0.0, "plan": None, "rounds": args.rounds}
+        if args.level == levels.QUICK and args.budget_seconds and names:
+            preview["allowance"] = probe_allowance(args.budget_seconds, state, names)
+            preview["plan"], preview["rounds"] = make_quick_plan(args, state, head, names, preview["allowance"], t["baseline"])
+            for line in planning.describe_plan(preview["plan"], len(names), state, head):
+                print(line)
+        previews.append(preview)
+    return previews
 
 
 def run_gate(args, repo, d, config_path, head, clean):

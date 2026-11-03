@@ -205,6 +205,37 @@ ctest --preset full      # or: ctest -C Release              milestones, and CI 
 `CMakePresets.json` has `quick` and `full` test presets (inheriting `default`; `quick` has
 `"filter": {"exclude": {"label": "full"}}`). CI keeps its existing presets, which run everything.
 
+### Self-test of the gate
+
+A gate that quietly does the wrong thing is worse than none (on 2026-11-03 one measured everything on a push with
+nothing to push, and a quick run took 58 minutes against a 90 s budget). `bench_check.py selftest` proves the wiring in
+seconds, without building or measuring anything:
+
+```bash
+python tools/perf/bench_check.py selftest --repo . [--target NAME] [--budget SECONDS]
+```
+
+It prints a table of PASS, WARN and FAIL rows and exits 1 on any FAIL. Consumers run it as the `selftest` of
+`.ci/local.json` (see `docs/ci-strategy.md`, "Local gates must self-test").
+
+| Check | Passes when |
+|---|---|
+| `hook pre-push`, `hook post-checkout` | The hook is in the directory git looks in (`core.hooksPath` honoured), is a sub0perf hook, calls an existing `bench_check.py` and an existing python, and is byte-identical to what `install-hooks` writes for this tooling. Other python or script paths with the same logic are a WARN; a changed hook is a FAIL (drift: re-run `install-hooks`) |
+| `config`, `target <name>`, `baseline` | `.git/sub0perf/config.json` parses; the baseline exists and has benchmarks. A missing build dir or executable is a WARN ("not built yet") |
+| `pin <name>`, `config full_refs/quick_budget` | Pin entries have file and var and repo or checkout, the file exists and its `set(VAR <sha>)` parses; settings have the right type |
+| `gate: empty stdin`, `deletion only`, `docs-only range` | The real `gate_command` skips each, with synthetic refs |
+| `gate: code range` | The gate plans a measuring run, and the quick plan's predicted seconds plus the probe allowance (a fifth of the budget while any benchmark has no recorded cost) fit the budget, from the repository's real coverage state |
+| `coverage <name>` | Always reported: benchmarks with no recorded cost (unknown), probed too slow (full level only), groups deferred, pushes to cover every group, the stalest group. A WARN while any is unknown or slow |
+| `lock` | No stale `.git/sub0perf/lock` (a live one is a WARN) |
+
+The decisions are the gate's own code, not a copy: `gate_command` has a **plan-only mode** (`args.plan_only`) that
+takes every decision up to the point where it would take the lock and build, then stops, recording why in
+`args.outcome` and the quick plan per target in `args.previews`. It does not run the pins' network check, write the
+log, or care about a dirty tree or `SUB0MATH_PERF_SKIP`, and `args.changed_paths` replaces the git diff of the pushed
+range (the selftest injects a docs-only list and a code list). The benchmark names come from the baseline and the
+coverage state, since listing them would run the benchmark executable. `choose_benchmarks` and the preview share
+`make_quick_plan`, so the plan is the one a real quick gate makes.
+
 ### Pre-push gate and explicit acceptance
 
 Configuring a repository that builds benchmarks installs two git hooks, unless on CI or
@@ -322,7 +353,8 @@ package, lowest layer first:
 | `pins` | Dependency pins: parsing, reading the sha, checking it is on the dependency's remote |
 | `report` | The markdown tables and job summary |
 | `accept` | `baseline` and `accept` commands (the logged `accepted` list) |
-| `lock`, `hooks`, `gate` | One run at a time; installing and chaining hooks; the pre-push gate |
+| `lock`, `hooks`, `gate` | One run at a time; installing and chaining hooks; the pre-push gate (with a plan-only mode) |
+| `selftest` | The `selftest` command: hook, config, gate decisions and lock checks that build and measure nothing |
 | `cli` | Argument parsing and the commands |
 
 Tests live in `sub0perf/tests/`, one file per area, and are found by `python -m unittest discover -s
