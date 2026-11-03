@@ -11,7 +11,7 @@ ctest --preset default          # Run tests
 ```
 
 `build/tests/Sub0Math_Bench` runs the paired benchmarks; budgets and profilers are in docs/PERFORMANCE.md.
-A git pre-push hook runs the tests: `git config core.hooksPath .githooks`.
+The pre-push hook is the performance gate that configuring installs into `.git/hooks` (sub0perf, docs/PERFORMANCE.md); no hook is committed and `core.hooksPath` stays unset. Tests run in local CI (`local_ci.py --level quick`), and `hook_check.py --repo .` from the .github repository's `tools/ci` proves the gate works.
 
 ## Commit Rules
 
