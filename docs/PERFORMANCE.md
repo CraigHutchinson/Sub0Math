@@ -410,7 +410,7 @@ The helper adds `-ffp-contract=off` (GCC, Clang) or `/fp:precise` (MSVC; clang-c
 benchmarks; a library whose inline headers are compiled in consumers' targets exports it as `INTERFACE`.
 The cost is the speed FMA would give, so a deliberate performance experiment with
 `SUB0MATH_NATIVE_ARCH` can leave it off, but then compares nothing against goldens. CI has one leg that
-builds the tests with `-march=x86-64-v3` (FMA available) and must still pass. Turning the helper on in a
+builds the tests with `-march=x86-64-v3` (FMA available) and must still pass. WebAssembly (Emscripten, under Node) must pass the same digests: [CI.md](CI.md), "WebAssembly leg". Turning the helper on in a
 repository moves its timings: re-record the baselines deliberately, with the reason.
 
 Library calls are the other source of platform differences: `std::sin`, `std::cos`, `std::exp`, `std::pow` and

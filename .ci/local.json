@@ -30,7 +30,8 @@
           "name": "python-tests",
           "commands": [
             "{python} -m unittest discover -s tools/perf",
-            "{python} -m unittest discover -s tools/provenance"
+            "{python} -m unittest discover -s tools/provenance",
+            "{python} -m unittest discover -s tools/wasm"
           ]
         },
         {
@@ -66,7 +67,14 @@
           "name": "python-tests",
           "commands": [
             "{python} -m unittest discover -s tools/perf",
-            "{python} -m unittest discover -s tools/provenance"
+            "{python} -m unittest discover -s tools/provenance",
+            "{python} -m unittest discover -s tools/wasm"
+          ]
+        },
+        {
+          "name": "wasm",
+          "commands": [
+            "{python} tools/wasm/wasm_gate.py --repo {repo} --prefix SUB0MATH"
           ]
         }
       ]

@@ -63,6 +63,8 @@ ctest --preset default
 build/tests/Sub0Math_Bench            # paired benchmarks: plain numbers vs quantities, float vs double
 ```
 
+The determinism digests are also checked on WebAssembly: `python tools/wasm/wasm_gate.py --repo . --prefix SUB0MATH` builds with Emscripten and runs the tests under Node (skipped without an emsdk; [docs/CI.md](docs/CI.md), "WebAssembly leg").
+
 Consume with CPM at an exact commit:
 
 ```cmake

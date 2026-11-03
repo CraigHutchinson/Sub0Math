@@ -69,6 +69,11 @@ matched on every Windows build and differed on Linux and macOS, with libm `sin`/
 - **Contract:** only `+ - *` and exact scaling are used, so the bits depend on the compiler not fusing
   multiply-add: build with `sub0math_target_deterministic_fp` (`-ffp-contract=off`). Measured: identical with
   GCC, GCC `-march=x86-64-v3` and Clang `-march=x86-64-v3`.
+- **WebAssembly:** identical too. The determinism tests (every bit test of `det::`, and the digests of Sub0Physics and
+  BikeDynamics that the state paths feed) pass unchanged when built with Emscripten (emsdk 6.0.13, libc++, musl) and
+  run under Node 24: the same fdlibm source, the same IEEE `+ - * / sqrt`, no contraction. The leg is
+  `tools/wasm/wasm_gate.py`, the `wasm` step of the full level ([CI.md](CI.md), "WebAssembly leg"); results are
+  recorded in BikeDynamics' `docs/CONNECTED_BIKE.md`.
 
 ## Roles
 
