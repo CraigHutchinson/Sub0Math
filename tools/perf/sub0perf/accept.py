@@ -45,7 +45,7 @@ def power_refusal(record, source, force=False):
     if record.get("power_override"):
         print(f"bench_check: {source} was measured under {power.OVERRIDE_VAR}=1 (power: {power.label(info)}); it can never become a baseline")
         return True
-    if power.key(info) != (power.AC, False):
+    if power.key(info) != (power.AC, False, False):
         if force:
             print(f"bench_check: WARNING: recording a baseline from a run measured on {power.label(info)} (--force-power)")
             return False

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .baseline import baseline_data, make_record
-from . import deferral, levels, plan as planning, power
+from . import deferral, levels, plan as planning, power, speed
 from .common import REFERENCE_MARK, group_of, read_json, tooling_script
 from .confirm import confirm_regressions, inconclusive_in, retry_inconclusive
 from .gitstate import (ZERO_SHA_CHARS, accepted_since, changed_paths_between, documentation_only, git, git_head, log_event,
@@ -109,6 +109,11 @@ def gate_command(args):
             args.outcome = "skip-docs"
             return 0
     pol, state = power.policy(config=config), power.power_state()
+    if not state.untrusted:  # battery defers anyway; a throttled mains machine is found by timing the calibration kernel, before any build
+        found = speed.check_targets([(name, t["exe"], t["baseline"]) for name, t in config.get("targets", {}).items()], config=config)
+        for note in found.notes:
+            print(note)
+        state = power.with_speed(state, found.ratio, found.limit)
     for note in power.environment_notes(state, pol):
         print(note)
     if state.untrusted and not pol.override:  # before any build or measuring: a battery timing is not comparable with the baseline
@@ -359,7 +364,7 @@ def run_gate(args, repo, d, config_path, head, clean):
     elif not blocked and not state.untrusted:
         deferral.clear(d)  # measured on mains and fine: the unmeasured range is covered
     if state.untrusted:  # repeated at the end, where the verdict is read
-        print(f"\nsub0perf: {power.OVERRIDE_TEXT}")
+        print(f"\nsub0perf: {power.override_text(state)}")
     return 1 if blocked else 0
 
 

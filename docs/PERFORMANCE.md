@@ -270,6 +270,39 @@ the switches in effect (exit 3 on battery).
   power state is being faked. The decision tests and `selftest` use it.
 - **After-build check.** The `auto` run after a build defers on battery the same way (it is a measurement too).
 
+#### Throttled machine on mains
+
+Mains is not enough: a vendor power mode, a charging power cap or thermal limits can pin the CPU at its base clock with no
+boost, and every timing then comes out a uniform factor slower (a laptop on mains, plan Balanced, ran 2.4x slow while the
+power state read `ac`). The sub0perf environment controls would flag such a run ENVIRONMENT, but only after measuring
+everything. `sub0perf/speed.py` catches it first:
+
+- **The check.** Before any build, the gate times the benchmark executable's own `--calibration` kernel (a fixed dependent
+  arithmetic chain, single thread, about 0.3 s) and divides it by the `calibration_ns` stored in the baseline, which the same
+  kernel produced. It uses the executable already built (no build is needed), pinned like the measurements. A reading over the
+  limit is repeated until two agree, because the first reading after idle runs at a cold clock (about 1.9x on the reference
+  host, gone on the next run). It is skipped, with a line saying so, when there is no built executable or the baseline has no
+  calibration (a first run on a host), and on battery (which defers anyway).
+- **Limit.** Slower than 1.4x is `throttled` (`SUB0MATH_PERF_THROTTLE_RATIO`, or `"throttle_ratio"` in
+  `.git/sub0perf/config.json`). The default comes from the 32 local records of the reference host: the median calibration of a
+  run stays within 0.97x..1.29x of the baseline's (the high end overlapped other load), while a machine pinned at base clock
+  reads about 1.9x. Raise it for a host whose normal spread is wider; do not lower it below the spread of your own records.
+- **Handling.** Exactly as battery: deferral (exit 0, the range goes to `deferred.json`), strict mode refuses, and
+  `SUB0MATH_PERF_ON_BATTERY=1` measures anyway. The switch keeps its published name and covers both states. The message gives
+  the ratio and the likely causes (vendor power mode, charging cap, thermal). An override run is flagged (`power.throttled`,
+  `power_override`) and can never become a baseline; a throttled record that was not an override (a run made by hand) needs
+  `--force-power`, like battery. A record whose throttled flag differs from the baseline's judges absolute verdicts as
+  ENVIRONMENT.
+- **Records.** `power.speed_ratio` holds the measured ratio in every gate and `auto` record (also when fine), so a drift in a
+  host's normal ratio shows in the records. `bench_check.py power --exe BENCH --baseline FILE` prints the check (exit 3 when
+  throttled); `selftest` shows the ratio now as the `speed now` row.
+- **Limits of the check.** It is one cold, single-thread kernel: a cap that bites only under sustained all-core load, or a
+  throttle that builds up during a long run, is not seen before measuring. The existing clock-drift and control checks still
+  catch those afterwards. The Windows `% Processor Performance` counter is not used: it averages all cores, so a single idle-ish
+  probe cannot read it meaningfully. The ratio is only meaningful against a baseline recorded on the same host.
+- **Tests only.** `SUB0PERF_FAKE_SPEED=<ratio>` replaces the measurement (the gate warns when it is set); the unit tests and
+  `selftest` use it, with a fake calibration reader for the measurement itself.
+
 ### Pre-push gate and explicit acceptance
 
 Configuring a repository that builds benchmarks installs two git hooks, unless on CI or

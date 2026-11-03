@@ -79,7 +79,7 @@ import contextlib
 import os
 from pathlib import Path
 
-from . import levels, platform_proc, plan as planning, power
+from . import levels, platform_proc, plan as planning, power, speed
 from .accept import accept_command, baseline_command
 from .baseline import make_record, write_samples
 from .common import read_json
@@ -95,9 +95,25 @@ from .runner import PowerChanged, fill_unmeasured, measure_all, rerunner, run_ro
 from .stats import rounds_needed
 
 
-def power_command(args):
-    """Prints the power state (and the switches in effect); exit 0 when timings are trustworthy, 3 on battery or in a saver."""
+def checked_state(args):
+    """The power state including the speed check against args.baseline (see speed.py), printed. Skipped on battery, which defers anyway."""
     state = power.power_state()
+    if state.untrusted or not (args.exe and args.baseline):
+        return state
+    config = None
+    if getattr(args, "repo", None):
+        perf = perf_dir(Path(args.repo))
+        config = read_json(perf / "config.json") if perf and (perf / "config.json").is_file() else None
+    found = speed.check_targets([(args.target or Path(args.exe).stem, args.exe, args.baseline)], config=config)
+    for note in found.notes:
+        print(note)
+    return power.with_speed(state, found.ratio, found.limit)
+
+
+def power_command(args):
+    """Prints the power state (and the switches in effect); exit 0 when timings are trustworthy, 3 on battery, in a saver or throttled
+    (the speed check runs when --exe and --baseline are given)."""
+    state = checked_state(args)
     print(f"sub0perf: power: {power.describe(state)}")
     for note in power.environment_notes(state, power.policy()):
         print(note)
@@ -105,12 +121,12 @@ def power_command(args):
 
 
 def run_command(args):
-    state = power.power_state()
+    state = checked_state(args)  # with --baseline: a throttled machine is noticed, and the record cannot become a baseline
     if state.untrusted:
         print(f"sub0perf: WARNING: measuring {state.reason()}; the record carries the power state, and cannot become a baseline "
               f"without --force-power")
     samples, meta, positions, counters = measure_all(args.exe, args)
-    write_samples(args.out, make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed))
+    write_samples(args.out, make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, state))
     return 0
 
 
@@ -123,7 +139,8 @@ def check_command(args):
 def auto_command(args):
     if os.environ.get("SUB0MATH_PERF_SKIP"):
         return 0  # the gate builds benchmarks itself and measures them once
-    state, pol = power.power_state(), power.policy()
+    state, pol = checked_state(args), power.policy()
+    args.power_state = state
     for note in power.environment_notes(state, pol):
         print(note)
     if state.untrusted and not pol.override:  # the after-build check burns battery for a verdict that cannot be trusted
@@ -161,10 +178,11 @@ def measure_and_judge(args):
         args.subset = len(names) < len(list_names(args.exe, ""))
     budget = planning.Budget(args.budget_seconds if args.level == levels.QUICK else None)
     samples, meta, positions, counters = measure_all(args.exe, args, names=names, rounds=rounds, timings=timings)
-    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed)
-    if power.power_state().untrusted:  # only under SUB0MATH_PERF_ON_BATTERY
+    state = getattr(args, "power_state", None) or power.power_state()
+    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, state)
+    if state.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY
         record["power_override"] = True
-        print(f"sub0perf: {power.OVERRIDE_TEXT}")
+        print(f"sub0perf: {power.override_text(state)}")
     # Benchmarks too noisy to judge get more rounds, up to --max-rounds in total (a quick run only while the budget allows).
     while len(meta) < args.max_rounds:
         rows, pair_rows, _ = evaluate_with(record, args.baseline, args, bool(args.filter))
@@ -195,7 +213,7 @@ def measure_and_judge(args):
         print(f"sub0perf: the time budget was exceeded by {budget.overrun():.0f} s")
     _, _, regressed = report(record, args)
     if record.get("power_override"):
-        print(f"\nsub0perf: {power.OVERRIDE_TEXT}")
+        print(f"\nsub0perf: {power.override_text(record.get('power') or {})}")
     return 0 if args.report_only or not regressed else 1
 
 

@@ -26,7 +26,7 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
                      " controls, which do not use the library). It is factored out, but absolute verdicts are less"
                      " certain than usual; pair ratios and instruction counts are unaffected.")
     if env.get("power_override"):
-        lines.append(f"> **{power.OVERRIDE_TEXT}**  (power: {power.label(env.get('power'))}, override: true)")
+        lines.append(f"> **{power.override_text(env.get('power') or {})}**  (power: {power.label(env.get('power'))}, override: true)")
     if env.get("method"):
         lines.append(f"> Method mismatch: {env['method']}.")
     if abs(env["clock_drift"]) > 0.05:
