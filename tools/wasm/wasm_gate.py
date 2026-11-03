@@ -32,7 +32,8 @@ from typing import Optional
 
 COMPILE_FLAGS = "-fexceptions"
 LINK_FLAGS = "-fexceptions -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1"
-SKIP_EXIT = 0
+SKIP_EXIT = 0  # with --allow-missing-sdk
+MISSING_SDK_EXIT = 2  # a full-level attestation must not pass without the WASM leg
 
 
 def find_emsdk(explicit: Optional[str], repo: Path, environ: dict) -> Optional[Path]:
@@ -124,15 +125,17 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--builddir", default="build-wasm")
     ap.add_argument("--emsdk", help="the Emscripten SDK directory (default: EMSDK_DIR, EMSDK, <repo>/../emsdk)")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--allow-missing-sdk", action="store_true",
+                    help="exit 0 when no Emscripten SDK is found (default: fail, so a missing SDK is never reported as a pass)")
     ap.add_argument("--all", action="store_true", help="also run the suites labelled full (ctest without -LE full)")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
     emsdk = find_emsdk(args.emsdk, repo, dict(os.environ))
     if emsdk is None:
-        print("wasm gate: SKIPPED, no Emscripten SDK found (set EMSDK_DIR, or clone emsdk next to this repository "
+        print(f"wasm gate: {'SKIPPED' if args.allow_missing_sdk else 'FAILED'}, no Emscripten SDK found (set EMSDK_DIR, or clone emsdk next to this repository "
               "and install it; see docs/CI.md in Sub0Math, 'WebAssembly leg'). Nothing was built or tested.")
-        return SKIP_EXIT
+        return SKIP_EXIT if args.allow_missing_sdk else MISSING_SDK_EXIT
 
     env = emsdk_environment(emsdk, dict(os.environ))
     guard = PerfConfigGuard(repo)

@@ -35,8 +35,9 @@ suites labelled full). It is the `wasm` step of the `full` level in `.ci/local.j
 - **Toolchain.** Install the Emscripten SDK once (`git clone https://github.com/emscripten-core/emsdk`, then
   `emsdk install latest` and `emsdk activate latest` without `--permanent`), next to the repositories (`../emsdk`),
   or point `EMSDK_DIR` at it. The script enters the SDK's environment for its own child processes only; nothing is
-  registered in the machine's environment. Without an SDK the step prints `wasm gate: SKIPPED` and exits 0, so a
-  machine without the toolchain still runs the rest of the full level. Last verified with Emscripten 6.0.13 and Node 24.
+  registered in the machine's environment. Without an SDK the step prints `wasm gate: FAILED` and exits 2, so a
+  full-level attestation is never posted without the WASM leg; `--allow-missing-sdk` turns that into a `SKIPPED`
+  exit 0 for a deliberate partial run. Last verified with Emscripten 6.0.13 and Node 24.
 - **Flags.** The leg adds `-fexceptions` (doctest reports a failed `REQUIRE` by throwing; without it the run aborts
   at the first failure), `-sNODERAWFS=1` (tests read golden files from the host file system) and
   `-sALLOW_MEMORY_GROWTH=1`. None changes a numeric result. `-ffp-contract=off` stays on through

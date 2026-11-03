@@ -35,11 +35,19 @@ class FindEmsdkTest(unittest.TestCase):
             repo.mkdir()
             self.assertIsNone(wasm_gate.find_emsdk(None, repo, {}))
 
-    def test_absent_sdk_skips_with_exit_zero(self):
+    def test_absent_sdk_fails_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "Repo"
             repo.mkdir()
-            self.assertEqual(wasm_gate.main(["--repo", str(repo), "--prefix", "X", "--emsdk", str(Path(tmp) / "none")]), 0)
+            self.assertEqual(wasm_gate.main(["--repo", str(repo), "--prefix", "X", "--emsdk", str(Path(tmp) / "none")]),
+                             wasm_gate.MISSING_SDK_EXIT)
+
+    def test_absent_sdk_skips_with_exit_zero_when_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "Repo"
+            repo.mkdir()
+            self.assertEqual(wasm_gate.main(["--repo", str(repo), "--prefix", "X", "--emsdk", str(Path(tmp) / "none"),
+                                             "--allow-missing-sdk"]), 0)
 
 
 class EnvironmentTest(unittest.TestCase):
