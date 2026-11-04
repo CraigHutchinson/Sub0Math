@@ -245,7 +245,7 @@ def run_gate(args, repo, d, config_path, head, clean):
     config = read_json(config_path)
     upstream = git(repo, "rev-parse", "@{upstream}")
     blocked = []
-    state, pol = args.power_state, args.power_policy
+    power_now, pol = args.power_state, args.power_policy
     pending = deferral.load(d)
     for line in deferral.describe(pending):
         print(line)
@@ -269,9 +269,9 @@ def run_gate(args, repo, d, config_path, head, clean):
         # Measuring time, probing included; the build above does not count.
         budget = planning.Budget(max(args.budget_seconds - probed_s, 0.0) if args.budget_seconds else args.budget_seconds)
         samples, meta, positions, counters = measure_all(exe, args, names=chosen, rounds=rounds, timings=timings)
-        record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed, state)
+        record = make_record(exe, samples, meta, positions, counters, args.epochs, args.seed, power_now)
         record["level"] = args.level
-        if state.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY: never a baseline, and every report says so
+        if power_now.untrusted:  # only under SUB0MATH_PERF_ON_BATTERY: never a baseline, and every report says so
             record["power_override"] = True
         record["unmeasured"] = sorted(set(all_names) - set(chosen))
         args.baseline = t["baseline"]
@@ -355,16 +355,16 @@ def run_gate(args, repo, d, config_path, head, clean):
             print("  (recorded in the local record and log; re-run the check on a quieter machine to judge them)")
         log_event(repo, {"event": "gate", "target": target, "commit": head, "reference": ref_sha,
                          "blocked": target in blocked, "regressed_vs_baseline": regressed_base, "unaccepted_vs_record": unaccepted, "unreproduced_vs_record": unreproduced,
-                         "inconclusive": inconclusive, "power": state.as_dict(), "power_override": state.untrusted, "seed": args.seed, "level": args.level,
+                         "inconclusive": inconclusive, "power": power_now.as_dict(), "power_override": power_now.untrusted, "seed": args.seed, "level": args.level,
                          "measured": len(chosen), "benchmarks": len(all_names), "seconds": round(measured_s, 1)})
     if blocked and pending:
         print("\nsub0perf: the push is blocked by a regression; earlier pushes were not measured, so it may come from any of them:")
         for line in deferral.describe(pending)[1:]:
             print(line)
-    elif not blocked and not state.untrusted:
+    elif not blocked and not power_now.untrusted:
         deferral.clear(d)  # measured on mains and fine: the unmeasured range is covered
-    if state.untrusted:  # repeated at the end, where the verdict is read
-        print(f"\nsub0perf: {power.override_text(state)}")
+    if power_now.untrusted:  # repeated at the end, where the verdict is read
+        print(f"\nsub0perf: {power.override_text(power_now)}")
     return 1 if blocked else 0
 
 

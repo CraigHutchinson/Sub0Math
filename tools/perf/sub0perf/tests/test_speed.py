@@ -383,3 +383,35 @@ class PowerCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GateRecordTest(unittest.TestCase):
+    """run_gate hands make_record the power state, not the coverage state of the same name (a crash once, on a real push)."""
+
+    def test_the_gate_record_gets_the_power_state(self):
+        from .. import gate
+        seen = []
+
+        class Stop(Exception):
+            pass
+
+        def fake_record(*a, **k):
+            seen.append(a[-1])
+            raise Stop()
+
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / "config.json"
+            config.write_text(json.dumps({"targets": {"T": {"build_dir": "b", "exe": "e", "baseline": "b.json"}}}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {power.FAKE_VAR: "ac"}):
+                now = power.power_state()
+            args = types.SimpleNamespace(power_state=now, power_policy=power.policy(config={}), level="quick", budget_seconds=90.0,
+                                         epochs=0, seed=1)
+            with mock.patch.object(gate, "git", return_value="up"), \
+                    mock.patch.object(gate.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)), \
+                    mock.patch.object(gate, "list_names", return_value=["A"]), \
+                    mock.patch.object(gate, "choose_benchmarks", return_value=(["A"], 3, 0.0)), \
+                    mock.patch.object(gate, "measure_all", return_value=({}, [], {}, {})), \
+                    mock.patch.object(gate, "make_record", side_effect=fake_record):
+                with self.assertRaises(Stop):
+                    gate.run_gate(args, d, Path(d), config, "abc123456", True)
+        self.assertIs(seen[0], now)
