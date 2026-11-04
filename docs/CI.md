@@ -28,7 +28,7 @@ under Node:
 python tools/wasm/wasm_gate.py --repo . --prefix SUB0MATH        # in Sub0Physics: python ../Sub0Math/tools/wasm/wasm_gate.py --repo . --prefix SUB0PHYSICS
 ```
 
-`--prefix` is the repository's CMake option prefix (`SUB0MATH`, `SUB0PHYSICS`, `BIKEDYNAMICS`). It configures
+`--prefix` is the repository's CMake option prefix (for example `SUB0MATH`, `SUB0PHYSICS`). It configures
 `build-wasm` with `emcmake cmake` (Ninja, Release, benchmarks, perf hooks and the after-build perf check off,
 warnings as errors), builds with 4 jobs and runs `ctest -LE full` through the emsdk's Node (`--all` adds the
 suites labelled full). It is the `wasm` step of the `full` level in `.ci/local.json` of all three repositories.

@@ -35,6 +35,13 @@
           ]
         },
         {
+          "name": "private-names",
+          "commands": [
+            "{python} {ci_dir}/private_names.py --staged --repo {repo}",
+            "{python} {ci_dir}/private_names.py --tree --repo {repo}"
+          ]
+        },
+        {
           "name": "hook-check",
           "commands": [
             "{python} {ci_dir}/hook_check.py --repo {repo}"

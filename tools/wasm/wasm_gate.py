@@ -4,8 +4,8 @@ under Node, so every digest a test asserts is checked against the same bits the 
 
     python <Sub0Math>/tools/wasm/wasm_gate.py --repo . --prefix SUB0PHYSICS [--all] [--builddir build-wasm]
 
-The repository's CMake options are named <PREFIX>_BUILD_BENCHMARKS and <PREFIX>_WARNINGS_AS_ERRORS (SUB0MATH,
-SUB0PHYSICS, BIKEDYNAMICS). Tests run through CMake's crosscompiling emulator, which is the emsdk's own Node.
+The repository's CMake options are named <PREFIX>_BUILD_BENCHMARKS and <PREFIX>_WARNINGS_AS_ERRORS (for example SUB0MATH,
+SUB0PHYSICS). Tests run through CMake's crosscompiling emulator, which is the emsdk's own Node.
 
 The Emscripten SDK is found, in order, at --emsdk, the EMSDK_DIR variable, the EMSDK variable (set once an
 emsdk_env script has run) and <repo>/../emsdk. Without one this prints a clear message and exits 0: the leg is

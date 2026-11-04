@@ -70,10 +70,10 @@ matched on every Windows build and differed on Linux and macOS, with libm `sin`/
   multiply-add: build with `sub0math_target_deterministic_fp` (`-ffp-contract=off`). Measured: identical with
   GCC, GCC `-march=x86-64-v3` and Clang `-march=x86-64-v3`.
 - **WebAssembly:** identical too. The determinism tests (every bit test of `det::`, and the digests of Sub0Physics and
-  BikeDynamics that the state paths feed) pass unchanged when built with Emscripten (emsdk 6.0.13, libc++, musl) and
+  a private bike-dynamics consumer that the state paths feed) pass unchanged when built with Emscripten (emsdk 6.0.13, libc++, musl) and
   run under Node 24: the same fdlibm source, the same IEEE `+ - * / sqrt`, no contraction. The leg is
   `tools/wasm/wasm_gate.py`, the `wasm` step of the full level ([CI.md](CI.md), "WebAssembly leg"); results are
-  recorded in BikeDynamics' `docs/CONNECTED_BIKE.md`.
+  recorded in that consumer's connected-bike notes.
 
 ## Roles
 
@@ -160,8 +160,8 @@ triangles will be a function (`toMesh(shape, ...)`), not a type. Purposes that c
 
 | Item | Trigger |
 |---|---|
-| Fixed-point `Rep` | KismoEdge firmware math |
-| Electric current, amount of substance | KismoEdge sensor drivers |
+| Fixed-point `Rep` | A private embedded project's firmware math |
+| Electric current, amount of substance | A private embedded project's sensor drivers |
 | `interop/` converters for Filament, glm, Eigen | KismoEngine / Crucible renderer adoption |
 | `std::format` support with unit symbols | First logging consumer (Sub0Log) |
 | Adoption in Sub0HexGrid (`Point` becomes `Point2d`) | Coordinated with Crucible's pin |
