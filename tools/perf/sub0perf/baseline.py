@@ -42,7 +42,9 @@ def baseline_data(record):
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
             **({"power": record["power"]} if "power" in record else {}),
-            "calibration_ns": round(cal, 3), "epochs": record.get("epochs", 0), "cpu": record.get("cpu"),
+            "calibration_ns": round(cal, 3),
+            **({"calibration_sustained_ns": record["calibration_sustained_ns"]} if record.get("calibration_sustained_ns") else {}),
+            "epochs": record.get("epochs", 0), "cpu": record.get("cpu"),
             "benchmarks": {n: {"median_ns": round(s["median_ns"], 3), "cv": round(s["cv"], 4), "rounds": s["n"],
                                **({"modes": [round(s["modes"][0], 3), round(s["modes"][1], 3)]} if s["modes"] else {}),
                                **{k: round(c["median"], 2) for k, c in s["counters"].items()}}

@@ -107,7 +107,7 @@ def checked_state(args):
     found = speed.check_targets([(args.target or Path(args.exe).stem, args.exe, args.baseline)], config=config)
     for note in found.notes:
         print(note)
-    return power.with_speed(state, found.ratio, found.limit)
+    return power.with_speed(state, found.ratio, found.limit, found.sustained)
 
 
 def power_command(args):
@@ -126,7 +126,12 @@ def run_command(args):
         print(f"sub0perf: WARNING: measuring {state.reason()}; the record carries the power state, and cannot become a baseline "
               f"without --force-power")
     samples, meta, positions, counters = measure_all(args.exe, args)
-    write_samples(args.out, make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, state))
+    record = make_record(args.exe, samples, meta, positions, counters, args.epochs, args.seed, state)
+    if not state.untrusted:  # the sustained speed of this host, for a baseline made from the record (the guard compares with it)
+        sustained = speed.record_sustained(args.exe)
+        if sustained:
+            record["calibration_sustained_ns"] = sustained
+    write_samples(args.out, record)
     return 0
 
 

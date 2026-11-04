@@ -28,11 +28,20 @@ OVERRIDE_TEXT_THROTTLED = (f"{OVERRIDE_VAR}=1: measuring on a throttled machine;
 # name is kept because it is published.
 THROTTLE_CAUSES = ("likely causes: a vendor power mode, a charging power cap or thermal limits; check the power mode, "
                    "let the machine cool, or measure under another power setting")
+EFFICIENCY_MODE = "Best power efficiency"
+MODE_FIX = "set Balanced or Best performance (Settings > System > Power & battery > Power mode)"
 OVERRIDE_HINT = f"To measure anyway: set {OVERRIDE_VAR}=1. Results are flagged and can't become a baseline."
 STRICT_HINT = f"To defer instead of failing: unset {STRICT_VAR} and set strict_power to false in .git/sub0perf/config.json."
 
 _SCHEMES = {"381b4222-f694-41f0-9685-ff5bb260df2e": "Balanced", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c": "High performance",
             "a1841308-3541-4fab-bc81-f71556f20b4a": "Power saver", "e9a42b02-d5df-448d-aa00-03f14749eb61": "Ultimate performance"}
+
+# Windows power-mode overlays (the slider in Settings > Power & battery). The GUIDs are the overlay keys under
+# HKLM\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes, whose FriendlyName resources read 961cc777 "Better Battery-life
+# Overlay", 3af9b8d9 "High Performance Overlay" and ded574b5 "Max Performance Overlay" (the Windows 11 slider: Best power efficiency,
+# Better performance, Best performance). No overlay value, or the all-zero GUID, is Balanced. Read only; nothing is ever changed.
+_OVERLAYS = {"961cc777-2547-4f9d-8174-7d86181b8a7a": EFFICIENCY_MODE, "3af9b8d9-7c97-431d-ad78-34a8bfea439f": "Better performance",
+             "ded574b5-45a0-4f42-8737-46345c09c238": "Best performance", "00000000-0000-0000-0000-000000000000": "Balanced"}
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,9 @@ class PowerState:
     source: str = ""            # where the answer came from (windows, linux, macos, fake, none)
     speed_ratio: float = 0.0    # calibration now / the baseline's, where the speed check ran (0 = it did not)
     throttled: bool = False     # slower than the baseline's calibration by more than the limit (speed.py)
+    sustained: bool = False     # the slow reading was the sustained one (after a warm load), not the burst
+    mode_ac: str = ""           # Windows power-mode overlay on mains / on battery ("Balanced", "Best power efficiency"); reported, not judged
+    mode_dc: str = ""
 
     @property
     def untrusted(self):
@@ -53,20 +65,28 @@ class PowerState:
     def only_throttled(self):
         return self.throttled and self.state != BATTERY and not self.saver
 
+    @property
+    def mode(self):
+        """The power-mode overlay in effect for the current power state ('' = not known)."""
+        return self.mode_dc if self.state == BATTERY else self.mode_ac
+
     def reason(self):
         if self.only_throttled:
-            return f"machine throttled (calibration {self.speed_ratio:.2f}x slower than the baseline's)"
+            kind = "sustained calibration" if self.sustained else "calibration"
+            return f"machine throttled ({kind} {self.speed_ratio:.2f}x slower than the baseline's)"
         return "battery saver is on" if self.saver and self.state != BATTERY else "on battery"
 
     def as_dict(self):
         return {"state": self.state, "saver": self.saver, **({"scheme": self.scheme} if self.scheme else {}),
                 **({"speed_ratio": round(self.speed_ratio, 3)} if self.speed_ratio else {}),
-                **({"throttled": True} if self.throttled else {})}
+                **({"throttled": True} if self.throttled else {}), **({"sustained": True} if self.sustained else {}),
+                **({"mode": {"ac": self.mode_ac, "dc": self.mode_dc}} if self.mode_ac or self.mode_dc else {})}
 
 
-def with_speed(state, ratio, limit):
-    """`state` with the speed check's result: the ratio recorded, and throttled when it is over `limit`. A ratio of None = not checked."""
-    return dataclasses.replace(state, speed_ratio=ratio, throttled=ratio > limit) if ratio else state
+def with_speed(state, ratio, limit, sustained=False):
+    """`state` with the speed check's result: the ratio recorded, and throttled when it is over `limit`; `sustained` says the slowest
+    reading was the one taken after the warm load. A ratio of None = not checked."""
+    return dataclasses.replace(state, speed_ratio=ratio, throttled=ratio > limit, sustained=sustained) if ratio else state
 
 
 def key(info):
@@ -103,12 +123,30 @@ def _windows_scheme():
         return ""
 
 
+def _windows_modes():
+    """(mains, battery) power-mode overlay names from the registry, '' where unreadable. One cheap read, no process."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes") as key:
+            names = []
+            for value in ("ActiveOverlayAcPowerScheme", "ActiveOverlayDcPowerScheme"):
+                try:
+                    guid = str(winreg.QueryValueEx(key, value)[0]).strip("{}").lower()
+                except FileNotFoundError:
+                    guid = "00000000-0000-0000-0000-000000000000"  # no overlay set: Balanced
+                names.append(_OVERLAYS.get(guid, guid))
+            return tuple(names)
+    except (OSError, ImportError, ValueError):
+        return "", ""
+
+
 def _windows():
     status = _SystemPowerStatus()
     if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
         return PowerState(source="windows")
     state = {0: BATTERY, 1: AC}.get(status.ACLineStatus, UNKNOWN)
-    return PowerState(state, status.SystemStatusFlag == 1, _windows_scheme(), "windows")
+    ac, dc = _windows_modes()
+    return PowerState(state, status.SystemStatusFlag == 1, _windows_scheme(), "windows", mode_ac=ac, mode_dc=dc)
 
 
 def _read(path):
@@ -203,14 +241,18 @@ def environment_notes(state, pol, environ=None):
 
 def describe(state):
     """One line: 'ac (windows; Balanced)'."""
-    extra = "; ".join(x for x in (state.source, state.scheme) if x)
+    modes = f"power mode {state.mode_ac} (mains) / {state.mode_dc} (battery)" if state.mode_ac or state.mode_dc else ""
+    extra = "; ".join(x for x in (state.source, state.scheme, modes) if x)
     return (f"{state.state}{', battery saver' if state.saver else ''}{', throttled' if state.throttled else ''}"
-            + (f" ({extra})" if extra else "") + (f", calibration {state.speed_ratio:.2f}x the baseline's" if state.speed_ratio else ""))
+            + (f" ({extra})" if extra else "")
+            + (f", {'sustained ' if state.sustained else ''}calibration {state.speed_ratio:.2f}x the baseline's" if state.speed_ratio else ""))
 
 
 def deferral_text(state, strict):
     """The message when the gate does not measure: why, what happens next, and how to override (or turn strict off)."""
     causes = f" ({THROTTLE_CAUSES})" if state.only_throttled else ""
+    if state.only_throttled and state.mode == EFFICIENCY_MODE:  # the likeliest cause, named with its fix
+        causes = f" (Windows power mode: {state.mode}; {MODE_FIX}. Other causes: a charging power cap or thermal limits)"
     if strict:
         return (f"sub0perf: {state.reason()}{causes}: performance not measured and the push is refused (strict power mode). "
                 f"{OVERRIDE_HINT} {STRICT_HINT}")

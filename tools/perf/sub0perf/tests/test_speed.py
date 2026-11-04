@@ -58,8 +58,9 @@ class CheckTargetsTest(unittest.TestCase):
         self.baseline = self.dir / "base.json"
         self.baseline.write_text(json.dumps({"calibration_ns": 4800.0}), encoding="utf-8")
 
-    def check(self, read, **kw):
-        return speed.check_targets([("t", str(self.exe), str(self.baseline))], environ={}, read=read, **kw)
+    def check(self, read, environ=None, **kw):
+        return speed.check_targets([("t", str(self.exe), str(self.baseline))], environ={speed.WARM_VAR: "0", **(environ or {})},
+                                   read=read, **kw)
 
     def test_compares_with_the_baselines_calibration_and_says_so(self):
         found = self.check(lambda exe: 4900.0)
@@ -91,9 +92,70 @@ class CheckTargetsTest(unittest.TestCase):
     def test_the_slowest_target_decides(self):
         other = self.dir / "other.json"
         other.write_text(json.dumps({"calibration_ns": 1000.0}), encoding="utf-8")
-        found = speed.check_targets([("a", str(self.exe), str(self.baseline)), ("b", str(self.exe), str(other))], environ={},
-                                    read=lambda exe: 2000.0)
+        found = speed.check_targets([("a", str(self.exe), str(self.baseline)), ("b", str(self.exe), str(other))],
+                                    environ={speed.WARM_VAR: "0"}, read=lambda exe: 2000.0)
         self.assertAlmostEqual(found.ratio, 2.0)
+
+    def sustained(self, ns, calls=None):
+        """A fake sustained reader (exe, warm) -> ns; records the warm seconds asked for."""
+        return lambda exe, warm: (calls.append(warm) if calls is not None else None) or ns
+
+    def test_a_sustained_throttle_with_a_fine_burst_is_found(self):
+        """The 2026-11-04 laptop: the first 3 s run at boost (0.97x), then every core falls to 0.42x (2.4x the time)."""
+        self.baseline.write_text(json.dumps({"calibration_ns": 4800.0, "calibration_sustained_ns": 4850.0}), encoding="utf-8")
+        calls = []
+        found = self.check(lambda exe: 4650.0, {speed.WARM_VAR: "4.5"}, read_sustained=self.sustained(11600.0, calls))
+        self.assertEqual(calls, [4.5])
+        self.assertAlmostEqual(found.ratio, 11600 / 4850)
+        self.assertTrue(found.sustained)
+        self.assertIn("sustained calibration 11,600 ns over 4.5 s of load, against the baseline's 4,850 ns = 2.39x", found.notes[1])
+
+    def test_a_healthy_machine_passes_both_readings(self):
+        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=self.sustained(4700.0))
+        self.assertLess(found.ratio, 1.4)
+        self.assertEqual(len(found.notes), 2)
+
+    def test_an_old_baseline_compares_the_sustained_reading_with_this_runs_burst(self):
+        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=self.sustained(11600.0))
+        self.assertAlmostEqual(found.ratio, 11600 / 4700)  # the drop within the run
+        self.assertTrue(found.sustained)
+        self.assertIn("the baseline has no sustained calibration", found.notes[1])
+
+    def test_a_slow_burst_skips_the_warm_load(self):
+        found = self.check(lambda exe: 11000.0, {speed.WARM_VAR: "4.5"},
+                           read_sustained=mock.Mock(side_effect=AssertionError("burst already slow")))
+        self.assertGreater(found.ratio, 1.4)
+        self.assertFalse(found.sustained)
+        self.assertEqual(len(found.notes), 1)
+
+    def test_an_executable_without_soak_support_falls_back_to_the_burst_reading_and_says_so(self):
+        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=self.sustained(None))
+        self.assertAlmostEqual(found.ratio, 4700 / 4800)
+        self.assertIn("predates `--calibration --soak`", found.notes[1])
+
+    def test_a_failing_sustained_run_is_a_note_not_a_crash(self):
+        def broken(exe, warm):
+            raise OSError("cannot run")
+        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=broken)
+        self.assertIn("cannot run", found.notes[-1])
+
+    def test_warm_seconds_from_environment_config_default(self):
+        self.assertEqual(speed.warm_seconds({}), 4.5)
+        self.assertEqual(speed.warm_seconds({}, {"warm_seconds": 6}), 6)
+        self.assertEqual(speed.warm_seconds({speed.WARM_VAR: "0"}, {"warm_seconds": 6}), 0)
+        self.assertEqual(speed.warm_seconds({speed.WARM_VAR: "junk"}), 4.5)
+
+    def test_the_sustained_fake_alone_means_burst_fine_sustained_throttled(self):
+        found = speed.check_targets([], environ={speed.FAKE_SUSTAINED_VAR: "2.4"}, read=mock.Mock(side_effect=AssertionError("faked")))
+        self.assertEqual(found.ratio, 2.4)
+        self.assertTrue(found.sustained)
+        self.assertIn(speed.FAKE_SUSTAINED_VAR, found.notes[0])
+
+    def test_recording_a_sustained_calibration_for_a_baseline(self):
+        self.assertEqual(speed.record_sustained("exe", {}, None, self.sustained(4700.1234)), 4700.123)
+        self.assertIsNone(speed.record_sustained("exe", {}, None, self.sustained(None)))
+        self.assertIsNone(speed.record_sustained("exe", {speed.WARM_VAR: "0"}))
+        self.assertIsNone(speed.record_sustained("exe", {speed.FAKE_VAR: "1.0"}))
 
     def test_the_fake_replaces_the_measurement_and_is_warned_about(self):
         found = speed.check_targets([("t", "missing", "missing")], environ={speed.FAKE_VAR: "1.88"},
@@ -149,6 +211,29 @@ class StateTest(unittest.TestCase):
         rows, pairs, env = evaluate(rec, {"benchmarks": {}, "calibration_ns": 1.0}, 0.10, 0.05, 0.05, False)
         text = report.render(rows, pairs, env, "b", 0.1, 0.05)
         self.assertIn("throttled machine", text)
+
+
+class ModeTest(unittest.TestCase):
+    """The Windows power-mode overlay is reported by name, and named with its fix when the machine is throttled in the efficiency mode."""
+
+    def test_the_overlay_guid_is_named(self):
+        self.assertEqual(power._OVERLAYS["961cc777-2547-4f9d-8174-7d86181b8a7a"], "Best power efficiency")
+        self.assertEqual(power._OVERLAYS["00000000-0000-0000-0000-000000000000"], "Balanced")
+
+    def test_describe_and_the_record_carry_both_modes(self):
+        state = power.PowerState(power.AC, scheme="Balanced", source="windows", mode_ac="Best power efficiency", mode_dc="Balanced")
+        self.assertIn("power mode Best power efficiency (mains) / Balanced (battery)", power.describe(state))
+        self.assertEqual(state.as_dict()["mode"], {"ac": "Best power efficiency", "dc": "Balanced"})
+        self.assertEqual(power.PowerState(power.BATTERY, mode_ac="A", mode_dc="B").mode, "B")
+
+    def test_the_deferral_names_the_mode_and_the_fix(self):
+        state = power.with_speed(power.PowerState(power.AC, mode_ac="Best power efficiency"), 2.4, 1.4, sustained=True)
+        text = power.deferral_text(state, False)
+        self.assertIn("sustained calibration 2.40x slower", text)
+        self.assertIn("Windows power mode: Best power efficiency; set Balanced or Best performance", text)
+        plain = power.deferral_text(power.with_speed(power.PowerState(power.AC, mode_ac="Balanced"), 2.4, 1.4), False)
+        self.assertNotIn("Windows power mode", plain)
+        self.assertIn("vendor power mode", plain)
 
 
 class GateTest(RepoTestCase):

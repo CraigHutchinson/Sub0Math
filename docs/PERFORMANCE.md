@@ -283,6 +283,23 @@ everything. `sub0perf/speed.py` catches it first:
   limit is repeated until two agree, because the first reading after idle runs at a cold clock (about 1.9x on the reference
   host, gone on the next run). It is skipped, with a line saying so, when there is no built executable or the baseline has no
   calibration (a first run on a host), and on battery (which defers anyway).
+- **Sustained speed, not only burst.** A 0.3 s kernel runs inside the boost window. On a laptop in the Windows power mode
+  "Best power efficiency" (overlay `961cc777-2547-4f9d-8174-7d86181b8a7a`) every core held boost for about 3 s of load and then fell
+  to about 0.42x (P-cores) and 0.33x (E-cores): every BikeDynamics rolling-cost test read 2.4x slower while the 0.3 s kernel read
+  0.97x and the check passed. The check therefore also takes a **sustained** reading: `--calibration --soak <s>` runs the kernel
+  continuously in one process for `warm_seconds` (default 4.5 s; `SUB0MATH_PERF_WARM_SECONDS` or `"warm_seconds"` in the config;
+  0 = burst only) and reports the median of the last quarter. It must be one process (the slowdown does not carry into a new one;
+  15 short readings back to back all read 1.00x, a single long process read 2.4x). The gate acts on the slower of the burst and
+  sustained ratios. The sustained reading is compared with `calibration_sustained_ns` in the baseline, which `sub0perf run` records
+  (4.5 s extra, not on battery or when throttled); a baseline without it is compared with this run's own burst reading (a machine
+  that drops past the limit within seconds is throttled whatever the baseline says) and the note says so. An executable built
+  before `--soak` returns at once; that is noticed, noted, and only the burst reading is used (rebuild to get the check). The
+  sustained part is skipped when the burst is already over the limit, and on battery. **Cost:** 4.5 s plus a process start per push
+  that has something to measure (after the empty-push and docs-only skips), about 5 % of the quick gate's 90 s budget.
+- **Power mode.** On Windows the deferral names the power-mode overlay (`ActiveOverlayAcPowerScheme` / `ActiveOverlayDcPowerScheme`
+  under `HKLM\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes`, read only): `bench_check.py power` prints both
+  ("power mode Best power efficiency (mains) / Best power efficiency (battery)"), records carry them as `power.mode`, and a throttled
+  machine in "Best power efficiency" is told to set Balanced or Best performance. sub0perf never changes a setting.
 - **Limit.** Slower than 1.4x is `throttled` (`SUB0MATH_PERF_THROTTLE_RATIO`, or `"throttle_ratio"` in
   `.git/sub0perf/config.json`). The default comes from the 32 local records of the reference host: the median calibration of a
   run stays within 0.97x..1.29x of the baseline's (the high end overlapped other load), while a machine pinned at base clock
@@ -296,12 +313,13 @@ everything. `sub0perf/speed.py` catches it first:
 - **Records.** `power.speed_ratio` holds the measured ratio in every gate and `auto` record (also when fine), so a drift in a
   host's normal ratio shows in the records. `bench_check.py power --exe BENCH --baseline FILE` prints the check (exit 3 when
   throttled); `selftest` shows the ratio now as the `speed now` row.
-- **Limits of the check.** It is one cold, single-thread kernel: a cap that bites only under sustained all-core load, or a
-  throttle that builds up during a long run, is not seen before measuring. The existing clock-drift and control checks still
+- **Limits of the check.** It is a single-thread kernel for a few seconds: a cap that bites only under sustained all-core load, or a
+  throttle that builds up over minutes, is not seen before measuring. The existing clock-drift and control checks still
   catch those afterwards. The Windows `% Processor Performance` counter is not used: it averages all cores, so a single idle-ish
   probe cannot read it meaningfully. The ratio is only meaningful against a baseline recorded on the same host.
-- **Tests only.** `SUB0PERF_FAKE_SPEED=<ratio>` replaces the measurement (the gate warns when it is set); the unit tests and
-  `selftest` use it, with a fake calibration reader for the measurement itself.
+- **Tests only.** `SUB0PERF_FAKE_SPEED=<ratio>` replaces the burst measurement and `SUB0PERF_FAKE_SUSTAINED=<ratio>` the sustained
+  one (alone: burst fine, sustained throttled); the gate warns when either is set. The unit tests and `selftest` use them, with fake
+  calibration readers for the measurement itself.
 
 ### Pre-push gate and explicit acceptance
 

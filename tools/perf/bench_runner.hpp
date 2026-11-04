@@ -15,6 +15,10 @@
 //   --calibration  measure only the built-in calibration kernel: a fixed dependent arithmetic chain whose
 //                  time tracks the core's clock. bench_check.py uses it to correct for frequency and
 //                  thermal changes within and between runs
+//                  With --soak <seconds>: run the kernel continuously for that long in this one process and
+//                  report the median of its final quarter, the SUSTAINED speed. Some machines (a laptop in
+//                  Windows' "Best power efficiency" mode) hold boost for about 3 s and then fall to ~0.4x, and
+//                  only within one long-lived process: separate short processes each start at boost.
 //
 // Include after defining ANKERL_NANOBENCH_IMPLEMENT in exactly one translation unit.
 
@@ -28,6 +32,7 @@
 #include <nanobench.h>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sub0bench
@@ -139,7 +144,12 @@ public:
             std::fprintf(stderr, "no benchmark matches the filter\n");
             return 1;
         }
-        if (!json_.empty() && soakSeconds_ <= 0.0)
+        if (!json_.empty() && calibration_ && sustainedSeconds_ > 0.0)
+        {
+            std::ofstream out(json_);  // the shape bench_check.py reads (name, batch, median(elapsed))
+            out << "{\"results\":[{\"name\":\"__calibration\",\"batch\":1,\"median(elapsed)\":" << sustainedSeconds_ << "}]}\n";
+        }
+        else if (!json_.empty() && soakSeconds_ <= 0.0)
         {
             std::ofstream out(json_);
             ankerl::nanobench::render(ankerl::nanobench::templates::json(), results_, out);
@@ -152,6 +162,11 @@ private:
     // vectorisation. The "__" prefix keeps it apart from real benchmarks.
     void runCalibration()
     {
+        if (soakSeconds_ > 0.0)
+        {
+            runSustainedCalibration();
+            return;
+        }
         ankerl::nanobench::Bench cal;
         cal.title("calibration").warmup(100).minEpochIterations(2000).epochs(epochs_ > 0 ? static_cast<std::size_t>(epochs_) : 11U);
         // Coefficients read through volatile, so the compiler cannot fold the chain at compile time.
@@ -168,6 +183,53 @@ private:
             ankerl::nanobench::doNotOptimizeAway(x);
         });
         results_.push_back(cal.results().back());
+    }
+
+    // The same chain as above, timed in slices of 2000 iterations back to back for soakSeconds_; the result is the median slice of
+    // the final quarter, in seconds per iteration like nanobench's median(elapsed).
+    void runSustainedCalibration()
+    {
+        static volatile double scale = 0.9999999;
+        static volatile double offset = 1e-7;
+        using Clock = std::chrono::steady_clock;
+        const auto begin = Clock::now();
+        const auto end = begin + std::chrono::duration<double>(soakSeconds_);
+        std::vector<std::pair<double, double>> slices;  // (seconds since begin, seconds per iteration)
+        double sink = 0.0;
+        for (auto now = begin; now < end; now = Clock::now())
+        {
+            const double k = scale;
+            const double c = offset;
+            double x = 1.0;
+            const auto t0 = Clock::now();
+            for (int n = 0; n < 2000; ++n)
+            {
+                for (int i = 0; i < 4096; ++i)
+                {
+                    x = x * k + c;
+                }
+                ankerl::nanobench::doNotOptimizeAway(x);
+            }
+            const auto t1 = Clock::now();
+            sink += x;
+            slices.emplace_back(std::chrono::duration<double>(t0 - begin).count(), std::chrono::duration<double>(t1 - t0).count() / 2000.0);
+        }
+        std::vector<double> tail;
+        for (const auto& [at, perIteration] : slices)
+        {
+            if (at >= soakSeconds_ * 0.75)
+            {
+                tail.push_back(perIteration);
+            }
+        }
+        if (tail.empty() && !slices.empty())
+        {
+            tail.push_back(slices.back().second);
+        }
+        std::sort(tail.begin(), tail.end());
+        sustainedSeconds_ = tail.empty() ? 0.0 : tail[tail.size() / 2];
+        std::printf("sustained calibration over %.1f s: %.0f ns per iteration (%zu slices, sink %g)\n", soakSeconds_,
+                    sustainedSeconds_ * 1e9, slices.size(), sink);
     }
 
     // The exact name when --exact is given; otherwise a case-insensitive substring (empty selects all).
@@ -189,6 +251,7 @@ private:
     std::string json_;
     std::string exact_;
     double soakSeconds_ = 0.0;
+    double sustainedSeconds_ = 0.0;
     int epochs_ = 0;
     bool list_ = false;
     bool calibration_ = false;

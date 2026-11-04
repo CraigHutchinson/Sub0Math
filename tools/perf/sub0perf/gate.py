@@ -113,7 +113,7 @@ def gate_command(args):
         found = speed.check_targets([(name, t["exe"], t["baseline"]) for name, t in config.get("targets", {}).items()], config=config)
         for note in found.notes:
             print(note)
-        state = power.with_speed(state, found.ratio, found.limit)
+        state = power.with_speed(state, found.ratio, found.limit, found.sustained)
     for note in power.environment_notes(state, pol):
         print(note)
     if state.untrusted and not pol.override:  # before any build or measuring: a battery timing is not comparable with the baseline
