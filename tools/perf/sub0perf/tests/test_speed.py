@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -128,16 +129,28 @@ class CheckTargetsTest(unittest.TestCase):
         self.assertFalse(found.sustained)
         self.assertEqual(len(found.notes), 1)
 
+    def unavailable(self, message):
+        def read(exe, warm):
+            raise speed.SustainedUnavailable(message)
+        return read
+
     def test_an_executable_without_soak_support_falls_back_to_the_burst_reading_and_says_so(self):
-        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=self.sustained(None))
+        found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"},
+                           read_sustained=self.unavailable("the executable wrote no output for `--calibration --soak` (it predates `--soak`); " + speed.REBUILD_ADVICE))
         self.assertAlmostEqual(found.ratio, 4700 / 4800)
-        self.assertIn("predates `--calibration --soak`", found.notes[1])
+        self.assertFalse(found.sustained)
+        self.assertEqual(len(found.notes), 2)
+        self.assertIn("no sustained reading: the executable wrote no output", found.notes[1])
+        self.assertIn("rebuild the benchmark executable", found.notes[1])
+        self.assertIn("Only the burst reading is used", found.notes[1])
 
     def test_a_failing_sustained_run_is_a_note_not_a_crash(self):
         def broken(exe, warm):
             raise OSError("cannot run")
         found = self.check(lambda exe: 4700.0, {speed.WARM_VAR: "4.5"}, read_sustained=broken)
         self.assertIn("cannot run", found.notes[-1])
+        self.assertIn("rebuild the benchmark executable", found.notes[-1])
+        self.assertAlmostEqual(found.ratio, 4700 / 4800)  # the burst reading still counts
 
     def test_warm_seconds_from_environment_config_default(self):
         self.assertEqual(speed.warm_seconds({}), 4.5)
@@ -153,7 +166,7 @@ class CheckTargetsTest(unittest.TestCase):
 
     def test_recording_a_sustained_calibration_for_a_baseline(self):
         self.assertEqual(speed.record_sustained("exe", {}, None, self.sustained(4700.1234)), 4700.123)
-        self.assertIsNone(speed.record_sustained("exe", {}, None, self.sustained(None)))
+        self.assertIsNone(speed.record_sustained("exe", {}, None, self.unavailable("x")))
         self.assertIsNone(speed.record_sustained("exe", {speed.WARM_VAR: "0"}))
         self.assertIsNone(speed.record_sustained("exe", {speed.FAKE_VAR: "1.0"}))
 
@@ -415,3 +428,58 @@ class GateRecordTest(unittest.TestCase):
                 with self.assertRaises(Stop):
                     gate.run_gate(args, d, Path(d), config, "abc123456", True)
         self.assertIs(seen[0], now)
+
+
+class ReadSustainedTest(unittest.TestCase):
+    """read_sustained_ns turns every way the sustained reading can fail into SustainedUnavailable with a plain message."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.exe = Path(tmp.name) / "bench.exe"
+        self.exe.write_text("x", encoding="utf-8")
+
+    def read(self, side_effect=None, return_value=None, warm=4.5, elapsed=None):
+        from .. import runner
+        clock = iter([0.0, warm if elapsed is None else elapsed])
+        with mock.patch.object(runner, "measure", side_effect=side_effect, return_value=return_value),                 mock.patch.object(speed.time, "monotonic", lambda: next(clock)):
+            return speed.read_sustained_ns(str(self.exe), warm)
+
+    def assertUnavailable(self, contains, **kw):
+        with self.assertRaises(speed.SustainedUnavailable) as caught:
+            self.read(**kw)
+        for text in contains:
+            self.assertIn(text, str(caught.exception))
+
+    def test_a_good_reading(self):
+        self.assertEqual(self.read(return_value={common.CALIBRATION: 4700.0}), 4700.0)
+
+    def test_an_old_executable_that_writes_no_output_file(self):
+        """The 2026-11-04 push: FileNotFoundError for one.json crashed the check."""
+        self.assertUnavailable(["wrote no output", "predates `--soak`", "rebuild"], side_effect=FileNotFoundError("one.json"))
+
+    def test_an_old_executable_that_returns_at_once(self):
+        self.assertUnavailable(["returned after 0.3 s", "ignores `--soak`", "rebuild"],
+                               return_value={common.CALIBRATION: 4700.0}, elapsed=0.3)
+
+    def test_unparseable_output(self):
+        self.assertUnavailable(["could not be read", "JSONDecodeError", "rebuild"], side_effect=json.JSONDecodeError("bad", "{", 1))
+        self.assertUnavailable(["could not be read", "KeyError"], side_effect=KeyError("__calibration"))
+
+    def test_a_failing_process(self):
+        self.assertUnavailable(["exited with code 3", "run it by hand"], side_effect=subprocess.CalledProcessError(3, "x"))
+
+    def test_a_hung_process(self):
+        self.assertUnavailable(["did not finish within 48 s", "retry when it is idle"], side_effect=subprocess.TimeoutExpired("x", 48))
+
+    def test_a_missing_executable_is_not_blamed_on_soak(self):
+        self.exe.unlink()
+        self.assertUnavailable(["cannot be found", "build it"], side_effect=FileNotFoundError("x"))
+
+    def test_an_executable_that_cannot_start(self):
+        self.assertUnavailable(["could not be run", "check the build"], side_effect=PermissionError("denied"))
+
+    def test_recording_a_baseline_stores_nothing_when_unavailable(self):
+        def read(exe, warm):
+            raise speed.SustainedUnavailable("x")
+        self.assertIsNone(speed.record_sustained("exe", {}, None, read))

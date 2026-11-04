@@ -19,8 +19,8 @@ thread, as in the measurement) continuously for `warm_seconds` (default 4.5 s: p
 <seconds>` of bench_runner.hpp) and reports the median of its last quarter. It has to be ONE process: the slowdown does not carry over
 to a new process (measured 2026-11-04: 15 short readings back to back all read 1.00x, while a single 32 s process read 2.4x), so
 repeating the 0.3 s reading does not find it. The result is compared with the baseline's `calibration_sustained_ns` (recorded the
-same way by `sub0perf run`). An executable built before `--soak` existed ignores it and returns after 0.3 s: that is noticed, noted, and
-only the burst figure is used. A baseline without it (recorded before this existed) has only the burst figure, so the sustained reading is compared
+same way by `sub0perf run`). An executable built before `--soak` existed ignores it (and writes no output file for it, or returns after 0.3 s): that is noticed, noted with the
+remedy (rebuild), and only the burst figure is used. Every failure of the sustained reading (see SustainedUnavailable) is such a note, never an exception. A baseline without it (recorded before this existed) has only the burst figure, so the sustained reading is compared
 with this run's own burst reading instead (a machine that drops by the limit within seconds is throttled whatever the baseline
 says) and the note says so. The ratio the gate acts on is the slowest of the two. The sustained part is skipped when the burst
 reading is already over the limit (deferring anyway). Its cost is warm_seconds plus a process start per push that has something to measure (the
@@ -98,14 +98,42 @@ def measure_ratio(exe, base_ns, bound, read=read_ns):
     return now / base_ns, now
 
 
+class SustainedUnavailable(Exception):
+    """The sustained reading could not be taken; the message says what happened and what to do. The burst figure is used alone."""
+
+
+REBUILD_ADVICE = "rebuild the benchmark executable (against a Sub0Math with `--calibration --soak`) to get the sustained reading"
+
+
 def read_sustained_ns(exe, warm):
     """One sustained reading: the calibration kernel run continuously for `warm` seconds in one process, the median of its last quarter
-    (ns per iteration of its chain). None when the executable ignored `--soak` (built before it existed: it returned at once)."""
+    (ns per iteration of its chain). Raises SustainedUnavailable, with the reason and the remedy, when it cannot be had:
+    an executable built before `--soak` existed either returns at once or writes no output for it; the output can be unreadable;
+    the process can fail to start, fail or hang."""
     from .runner import measure
     began = time.monotonic()
     with tempfile.TemporaryDirectory() as scratch:
-        value = measure(exe, ["--calibration", "--soak", f"{warm:g}"], scratch)[CALIBRATION]
-    return value if time.monotonic() - began >= 0.8 * warm else None
+        try:
+            value = measure(exe, ["--calibration", "--soak", f"{warm:g}"], scratch, timeout=warm * 4 + 30)[CALIBRATION]
+        except FileNotFoundError as error:
+            if Path(str(exe)).is_file():  # the executable is there, so what is missing is its output file
+                raise SustainedUnavailable(f"the executable wrote no output for `--calibration --soak` (it predates `--soak`); {REBUILD_ADVICE}") from error
+            raise SustainedUnavailable(f"the benchmark executable {exe} cannot be found; build it") from error
+        except subprocess.TimeoutExpired as error:
+            raise SustainedUnavailable(f"the sustained run did not finish within {error.timeout:g} s and was stopped; "
+                                       f"the machine may be heavily loaded: retry when it is idle") from error
+        except subprocess.CalledProcessError as error:
+            raise SustainedUnavailable(f"the executable exited with code {error.returncode} for `--calibration --soak {warm:g}`; "
+                                       f"run it by hand to see why, or {REBUILD_ADVICE}") from error
+        except (ValueError, KeyError, TypeError) as error:  # JSONDecodeError is a ValueError
+            raise SustainedUnavailable(f"the executable's `--soak` output could not be read ({type(error).__name__}: {error}); "
+                                       f"{REBUILD_ADVICE}") from error
+        except OSError as error:
+            raise SustainedUnavailable(f"the executable could not be run ({type(error).__name__}: {error}); check the build") from error
+    took = time.monotonic() - began
+    if took < 0.8 * warm:
+        raise SustainedUnavailable(f"the executable returned after {took:.1f} s instead of {warm:g} s (it ignores `--soak`); {REBUILD_ADVICE}")
+    return value
 
 
 def record_sustained(exe, environ=None, config=None, read=read_sustained_ns):
@@ -115,9 +143,8 @@ def record_sustained(exe, environ=None, config=None, read=read_sustained_ns):
     if warm <= 0 or environ.get(FAKE_VAR) or environ.get(FAKE_SUSTAINED_VAR):
         return None
     try:
-        value = read(exe, warm)
-        return None if value is None else round(value, 3)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return round(read(exe, warm), 3)
+    except (SustainedUnavailable, OSError, ValueError, KeyError, subprocess.SubprocessError):
         return None
 
 
@@ -153,13 +180,18 @@ def check_targets(targets, environ=None, config=None, read=read_ns, read_sustain
                     result.notes.append(f"sub0perf: speed check {label}: calibration {now:,.0f} ns against the baseline's {base_ns:,.0f} ns "
                                         f"= {ratio:.2f}x (throttled above {result.limit:.2f}x)")
                     if warm > 0 and ratio <= result.limit:  # a burst that is already slow defers anyway: no need to wait for more
-                        steady = read_sustained(exe, warm)
+                        try:
+                            steady = read_sustained(exe, warm)
+                        except SustainedUnavailable as problem:
+                            steady = None
+                            result.notes.append(f"sub0perf: speed check {label}: no sustained reading: {problem}. Only the burst reading is used")
+                        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as problem:
+                            steady = None
+                            result.notes.append(f"sub0perf: speed check {label}: no sustained reading: {type(problem).__name__}: {problem}. "
+                                                f"Only the burst reading is used; {REBUILD_ADVICE}")
                         base_sustained = data.get("calibration_sustained_ns")
                         against = base_sustained or now
-                        if steady is None:
-                            result.notes.append(f"sub0perf: speed check {label}: no sustained reading (this benchmark executable predates "
-                                                f"`--calibration --soak`; rebuild it); only the burst reading is used")
-                        else:
+                        if steady is not None:
                             ratios.append((steady / against, True))
                             result.notes.append(
                                 f"sub0perf: speed check {label}: sustained calibration {steady:,.0f} ns over {warm:g} s of load, against "

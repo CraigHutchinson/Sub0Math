@@ -32,9 +32,9 @@ def measure_full(exe, args, scratch, timeout=None):
     return results
 
 
-def measure(exe, args, scratch):
+def measure(exe, args, scratch, timeout=None):
     """Runs the benchmark executable once; returns {name: ns per op}."""
-    return {name: ns for name, (ns, _) in measure_full(exe, args, scratch).items()}
+    return {name: ns for name, (ns, _) in measure_full(exe, args, scratch, timeout).items()}
 
 
 def list_names(exe, text_filter):
