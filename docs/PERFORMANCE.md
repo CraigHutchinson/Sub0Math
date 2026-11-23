@@ -7,7 +7,7 @@ a private bike-dynamics consumer, ...) gets the same benchmark runner, budgets a
 ```cmake
 include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")   # after CPMAddPackage(Sub0Math ...)
 sub0math_target_perf_options(MyLibrary)                       # profile / vectorization / native options
-sub0math_add_benchmark(MyLibrary_Bench bench_my_library.cpp)    # plus _json/_check/_baseline/_vtune_*/...
+sub0math_add_benchmark(MyLibrary_Bench bench_my_library.cpp)    # plus _json/_check/_baseline/_compare/_vtune_*/...
 ```
 
 Configuring writes the scripts' location to `<build>/sub0math_tooling_dir.txt`, so shells and CI can run
@@ -220,7 +220,7 @@ It prints a table of PASS, WARN and FAIL rows and exits 1 on any FAIL. Consumers
 
 | Check | Passes when |
 |---|---|
-| `hook pre-push`, `hook post-checkout` | The hook is in the directory git looks in (`core.hooksPath` honoured), is a sub0perf hook, calls an existing `bench_check.py` and an existing python, and is byte-identical to what `install-hooks` writes for this tooling. Other python or script paths with the same logic are a WARN; a changed hook is a FAIL (drift: re-run `install-hooks`) |
+| `hook pre-push`, `hook post-checkout` | The hook is in the directory git looks in (`core.hooksPath` honoured), is a sub0perf hook, calls an existing `bench_check.py` and an existing python, and is byte-identical to what `install-hooks` writes for this tooling. Other python or script paths with the same logic are a WARN; a changed hook is a FAIL (drift: re-run `install-hooks`). In a tracked hooks directory, or under `SUB0MATH_PERF_HOOK_MODE=chain`, the committed hook must carry the one chaining line and `.git/sub0perf/hooks/<hook>` must match (FAIL otherwise, with the line to add) |
 | `config`, `target <name>`, `baseline` | `.git/sub0perf/config.json` parses; the baseline exists and has benchmarks. A missing build dir or executable is a WARN ("not built yet") |
 | `pin <name>`, `config full_refs/quick_budget` | Pin entries have file and var and repo or checkout, the file exists and its `set(VAR <sha>)` parses; settings have the right type |
 | `gate: empty stdin`, `deletion only`, `docs-only range` | The real `gate_command` skips each, with synthetic refs |
@@ -329,6 +329,19 @@ Configuring a repository that builds benchmarks installs two git hooks, unless o
 does the push). Paths in the hooks are shell-quoted, and when python or the tooling directory is gone
 a hook prints a message and does nothing instead of failing.
 
+**A tracked hooks directory is never touched.** When `core.hooksPath` points inside the worktree (for example
+`.githooks`), its files are committed and shared, so install-hooks does not rename or overwrite them, and does not add
+files there. Our hooks are kept in `.git/sub0perf/hooks/<hook>` (never tracked) and install-hooks prints the one line to add
+to the committed hook, before anything reads stdin:
+
+```sh
+[ ! -f "$(git rev-parse --path-format=absolute --git-common-dir)/sub0perf/hooks/pre-push" ] || sh "$(git rev-parse --path-format=absolute --git-common-dir)/sub0perf/hooks/pre-push" "$@" || exit $?
+```
+
+It prints nothing once the line is there. `SUB0MATH_PERF_HOOK_MODE=chain` does the same for an ordinary `.git/hooks`: nothing is
+written into git's hooks directory, and the line is printed. `install` (the default) keeps the rename-to-`.user` behaviour for
+an untracked hooks directory. `selftest` checks the line and the chained copy (see below).
+
 - **post-checkout** notes the commit. The first clean build afterwards keeps its measurement as that
   commit's record: `.git/sub0perf/records/<target>/<commit>.json`, local to the clone and never
   committed. So every commit measured on a clean tree has a record of where a branch started.
@@ -436,6 +449,9 @@ package, lowest layer first:
 | `levels` | Which level (quick or full) and budget a run has: `--level`, `SUB0MATH_PERF_LEVEL`, pushed milestone tags |
 | `plan` | The quick-level planner: pairs and controls always, rotation by staleness, coverage state, the time `Budget` |
 | `reproduce` | Measuring an earlier record's kept build beside the new one to reproduce a difference from the record |
+| `compare` | The `compare` command: interleaved A/B of two builds (two executables, or a kept build), at least 10 rounds |
+| `metrics` | Deterministic metrics: judging a metrics file against `perf/metrics.json` (exact, max, xfail) and logged `accept --metric` |
+| `output` | The output contract (`--format brief|json|md`, `--report`, `SUB0PERF_OUTPUT`) and holding back the chatter of long runs |
 | `pins` | Dependency pins: parsing, reading the sha, checking it is on the dependency's remote |
 | `report` | The markdown tables and job summary |
 | `accept` | `baseline` and `accept` commands (the logged `accepted` list) |
@@ -474,8 +490,117 @@ any git hook; the baseline log is the record that should explain why.
 Baselines live in `perf/baselines/<host>.json`: median, spread and rounds per benchmark, calibration
 time, and pair ratios. Timings from one machine say nothing about another, so each host has its own.
 Baselines in the older format (a number per benchmark) are still read, judged against the suite's
-median drift, and should be re-recorded. CI uses `--report-only` against `github-ubuntu` and writes
-the report to the job summary, because shared runners are noisy.
+median drift, and should be re-recorded. Sub0Math's CI does not time anything: it builds with
+`-DSUB0MATH_BUILD_BENCHMARKS=OFF` (and `SUB0MATH_PERF_ON_BUILD=OFF`, `SUB0MATH_PERF_GIT_HOOKS=OFF`), because shared
+runners are too noisy, and runs the tooling's own Python tests (`python -m unittest discover -s tools/perf`).
+Timing is the local gate's job. What may run anywhere is the deterministic part: the `<target>_smoke` and
+`<target>_metrics` ctest tests (label `smoke`), which never time ([Deterministic metrics](#deterministic-metrics)).
+
+## Deterministic metrics
+
+Some facts about a build do not depend on the machine: the size of a type, the number of iterations a solver
+needs, the bytes a path allocates, a count of kernel calls. They need no calibration, no rounds and no noise
+floor, so they are judged exactly, in milliseconds, and may run in every `ctest` and in CI.
+
+```cpp
+sub0bench::BenchRunner runner(argc, argv, "My library");
+runner.metric("sizeof Vec3<double>", sizeof(Vec3<double>), "B");                          // exact (the default)
+runner.metric("iterations to converge", iterations, "n", sub0bench::MetricKind::max);     // a ceiling
+```
+
+`runner.metric(name, value, unit, kind = exact|max)` registers a value (the last value of a name wins). Call it
+before the runs, or inside a workload: the two modes below run each selected workload once. The runner gains
+two flags that never time anything:
+
+| Flag | Does |
+|---|---|
+| `--metrics-only` | Runs each selected workload once and writes `{"metrics":[{"name","value","unit","kind"}]}` to the `--json` file, or to stdout without one |
+| `--smoke` | Runs each selected workload once; the exit status is the only output (0, or 1 when nothing matched) |
+
+A committed spec, `perf/metrics.json`, says what each metric must be:
+
+```json
+{"schema": "sub0perf-metrics-spec-1",
+ "metrics": {"sizeof Vec3<double>": {"kind": "exact", "expected": 24, "unit": "B"},
+             "iterations to converge": {"kind": "max", "limit": 40},
+             "known gap": {"kind": "exact", "expected": 1, "xfail": "why it is expected to fail today"}},
+ "accepted": []}
+```
+
+```bash
+python tools/perf/bench_check.py metrics --exe <bench> --spec perf/metrics.json           # runs --metrics-only itself
+python tools/perf/bench_check.py metrics --results metrics.json --spec perf/metrics.json
+```
+
+`exact` must equal `expected` (an optional absolute `tolerance`), `max` must not exceed `limit`. `xfail` takes a
+reason for a metric that is expected to fail: while it fails (XFAIL) it does not block, and when it starts to pass
+(XPASS) it does, so the marker gets removed. A spec metric the executable does not report is MISSING (blocks); a reported
+metric the spec lacks is NEW (listed, does not block). Exit 1 on FAIL, XPASS or MISSING; exit 2 on unreadable input.
+
+Moving a metric is explicit and logged, like a baseline: `accept --metric NAME... --reason "why"` (with
+`--spec`, and `--results` or `--exe`) sets the metric's `expected` (or `limit`) to the measured value, clears an `xfail`,
+and appends date, commit, reason, before and after to the spec's `accepted` list. `--all-changed` takes every failing,
+xfail and new metric. Commit the spec with the change.
+
+```cmake
+sub0math_add_benchmark(MyLibrary_Bench bench_my_library.cpp METRICS perf/metrics.json SMOKE_TEST)
+```
+
+`SMOKE_TEST` registers ctest test `<target>_smoke`; `METRICS <spec>` (relative to the project root) registers
+`<target>_metrics` and the target `<target>_metrics_accept` (reason in `SUB0MATH_PERF_REASON`). Both tests carry the
+label `smoke` and never time, so `ctest` and CI may run them: a layout or iteration-count regression is then a red test,
+and a benchmark that crashes is caught without a timing machine. Sub0Math dogfoods it with the sizes of its core types.
+
+## Output contract
+
+`check`, `auto`, `gate`, `compare` and `metrics` print in one of three formats, chosen with `--format brief|json|md`.
+The environment variable `SUB0PERF_OUTPUT=brief` makes brief the default (for hooks and agents); `--format` wins.
+Without either, the format is `md`, as before.
+
+- **brief**: ONE verdict line, then one line per row changed beyond noise (REGRESSED or IMPROVED; inconclusive and
+  unchanged rows are only counted):
+
+  ```text
+  perf: FAIL 1 regressed, 0 improved, 14 ok, 2 inconclusive; report build/perf/X.report.md
+  REGRESSED index/cold 1e5: +14.2% (noise 2.1%, tol 10%)
+  ```
+
+  `perf compare:` and `perf metrics:` prefix their own commands (`perf metrics: FAIL 1 failed, 0 xfail, 12 ok` then
+  `FAILED size: 32 B != expected 24`). With `--report-only` the status still says FAIL, but the exit status is 0.
+- **json**: exactly one object on stdout, schema `sub0perf-outcome-1`, mirroring `sub0perf-workload-outcome-1`:
+  `{"schema", "command", "status": "PASS|FAIL", "exit", "counts": {"regressed","improved","ok","inconclusive"},
+  "changed": [{"name","kind":"benchmark|pair|counter","verdict","change","noise","tolerance"}], "report", "next_action"}`.
+  `next_action` is the command to run next (an `accept ...` line after a regression). `metrics` has its own
+  `counts` (`failed`, `xpass`, `missing`, `xfail`, `new`, `ok`). A run that reached no verdict (a skipped gate, a deferral)
+  prints `status: "NO_VERDICT"` with the last lines in `log`.
+- **md**: the full markdown tables on stdout.
+
+The full markdown tables go to the report file, `--report <path>` (brief and json always write one; the default sits
+beside the samples file, `X.report.md`, or beside the executable, `<exe>.compare.md`; the gate uses
+`<build>/perf/<target>.report.md`). `GITHUB_STEP_SUMMARY` still gets the tables. In brief and json the chatter of a long
+run (`auto`, `gate`, `compare`: rounds, plans, notes) is held back in `<report>.log` (`.git/sub0perf/last-run.log` for the gate
+without `--report`), and only the lines that matter (refusals, blocked pushes, warnings, failures) follow the verdict.
+
+## Improve loop
+
+The loop an agent or a person follows to make something faster, in commands and in few tokens read: [PERF_LOOP.md](PERF_LOOP.md)
+(a skill file for agents is `tools/perf/skill/SKILL.md`). In short: `_runs` then `_check --format brief`, change, `_compare`
+against the kept previous build (`bench_check.py compare`, at least 10 interleaved rounds), keep or reject, iterate up to the
+three-pass rule, then `accept --reason` or `_baseline --reason` from a full steady run, and commit the baseline with the change.
+
+`compare` measures two builds alternately (which goes first flips every round) in this session, so a difference is the
+code and not the machine's state; it is the logic of the gate's reproduction step, exposed as a command:
+
+```bash
+python tools/perf/bench_check.py compare --exe <new bench> --against <old bench> [--filter TEXT] [--rounds 10]
+python tools/perf/bench_check.py compare --exe <new bench> --kept [SHA] --repo .   # newest kept build that differs from --exe, or SHA's
+cmake --build build --target <target>_compare                                      # the same, against the kept build
+```
+
+A build is kept (`.git/sub0perf/bins/<target>/<commit>/`, the newest three) whenever a clean tree is measured by the
+after-build check (`--record`) or the gate. `--filter` keeps whole groups, so a pair keeps its hand-written reference.
+REGRESSED means the new build is slower than the old one. CMake: `SUB0MATH_COMPARE_AGAINST=<exe>` and
+`SUB0MATH_COMPARE_FILTER=<text>` replace the kept build and add a filter.
 
 ## Floating-point determinism
 
