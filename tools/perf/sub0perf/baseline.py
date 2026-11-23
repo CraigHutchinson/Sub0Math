@@ -1,12 +1,21 @@
 """The two file formats: the samples record (written by run, auto and gate) and the baseline (format 2)."""
 
 import json
+import os
 import platform
 from pathlib import Path
 
 from . import platform_proc, power
 from .common import atomic_write_text
 from .stats import pair_ratios, summarise
+
+
+HOST_VAR = "SUB0MATH_PERF_HOST"  # the name the baseline file carries (perf/baselines/<name>.json); the build passes it on
+
+
+def perf_host(recorded=None):
+    """The host name a record or baseline carries: SUB0MATH_PERF_HOST (the name used for the baseline file) when set, else `recorded`, else the real one."""
+    return os.environ.get(HOST_VAR, "").strip() or recorded or platform.node()
 
 
 def make_record(exe, samples, meta, positions, counters, epochs=0, seed=None, state=None):
@@ -16,7 +25,7 @@ def make_record(exe, samples, meta, positions, counters, epochs=0, seed=None, st
     """
     return {"format": 2, "exe": Path(exe).name, "power": (state or power.power_state()).as_dict(), "epochs": epochs,
             "cpu": platform_proc.pin_cpu(), "seed": seed,
-            "counters": counters or {}, "host": platform.node(), "machine": platform.machine(),
+            "counters": counters or {}, "host": perf_host(), "machine": platform.machine(),
             "system": f"{platform.system()} {platform.release()}",
             "rounds": meta, "samples": samples, "positions": positions}
 
@@ -37,7 +46,7 @@ def baseline_data(record):
     """A format-2 baseline object built from a samples record."""
     stats, cal, _, _ = summarise(record)
     pairs = pair_ratios(stats)
-    return {"format": 2, "host": record.get("host", platform.node()), "machine": record.get("machine", platform.machine()),
+    return {"format": 2, "host": perf_host(record.get("host")), "machine": record.get("machine", platform.machine()),
             "system": record.get("system", f"{platform.system()} {platform.release()}"),
             "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. "
                     "Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",

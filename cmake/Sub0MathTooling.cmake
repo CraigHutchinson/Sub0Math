@@ -183,6 +183,8 @@ function(sub0math_add_benchmark target)
     set(samples "${CMAKE_BINARY_DIR}/perf/${target}.samples.json")
     set(baseline "${PROJECT_SOURCE_DIR}/perf/baselines/${SUB0MATH_PERF_HOST}.json")
     set(check "${tooling}/bench_check.py")
+    # Records and baselines carry the host name the baseline file is named by (SUB0MATH_PERF_HOST), not the machine's own name.
+    set(host_env ${CMAKE_COMMAND} -E env "SUB0MATH_PERF_HOST=${SUB0MATH_PERF_HOST}")
     set(profile "${tooling}/profile.py")
 
     add_custom_target(${target}_json
@@ -191,14 +193,14 @@ function(sub0math_add_benchmark target)
         DEPENDS ${target} USES_TERMINAL VERBATIM)
     # Interleaved, calibrated, load-aware rounds: see tools/perf/bench_check.py.
     add_custom_target(${target}_runs
-        COMMAND ${Python3_EXECUTABLE} "${check}" run --exe $<TARGET_FILE:${target}> --out "${samples}"
+        COMMAND ${host_env} ${Python3_EXECUTABLE} "${check}" run --exe $<TARGET_FILE:${target}> --out "${samples}"
                 --rounds ${SUB0MATH_BENCH_REPEATS}
         DEPENDS ${target} USES_TERMINAL VERBATIM)
     add_custom_target(${target}_check
         COMMAND ${Python3_EXECUTABLE} "${check}" check --results "${samples}" --baseline "${baseline}"
         DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
     add_custom_target(${target}_baseline
-        COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results "${samples}" --baseline "${baseline}"
+        COMMAND ${host_env} ${Python3_EXECUTABLE} "${check}" baseline --results "${samples}" --baseline "${baseline}"
         DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
 
     # Interleaved A/B against a kept build, or SUB0MATH_COMPARE_AGAINST (docs/PERF_LOOP.md, step 3).
@@ -243,7 +245,7 @@ function(sub0math_add_benchmark target)
         endif()
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E echo "perf: quick interleaved check of ${target} (SUB0MATH_PERF_ON_BUILD=${SUB0MATH_PERF_ON_BUILD})"
-            COMMAND ${Python3_EXECUTABLE} "${check}" auto --exe $<TARGET_FILE:${target}> --baseline "${baseline}"
+            COMMAND ${host_env} ${Python3_EXECUTABLE} "${check}" auto --exe $<TARGET_FILE:${target}> --baseline "${baseline}"
                     --rounds ${SUB0MATH_PERF_QUICK_ROUNDS} --epochs ${SUB0MATH_PERF_QUICK_EPOCHS}
                     --budget ${SUB0MATH_PERF_QUICK_BUDGET}
                     --out "${CMAKE_BINARY_DIR}/perf/${target}.quick.json" ${mode_args}

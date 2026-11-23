@@ -1,9 +1,12 @@
 """Tests for baseline."""
 
 import json
+import os
+import platform
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from .. import baseline, common, gitstate
 from .helpers import git_run
@@ -34,6 +37,40 @@ class AtomicWriteTest(unittest.TestCase):
             baseline.write_baseline(Path(tmp) / "b" / "base.json", {"format": 2})
             self.assertEqual(json.loads((Path(tmp) / "s.json").read_text(encoding="utf-8"))["seed"], 42)
             self.assertEqual(json.loads((Path(tmp) / "b" / "base.json").read_text(encoding="utf-8")), {"format": 2})
+
+
+class HostNameTest(unittest.TestCase):
+    """SUB0MATH_PERF_HOST is the name the baseline file carries; records and baselines record it, not the machine's own name."""
+
+    def setUp(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop(baseline.HOST_VAR, None)
+
+    def record(self):
+        return baseline.make_record("dir/Bench.exe", {"a": [1.0, 1.1, 0.9]}, [{"round": r, "calibration_start_ns": 1000.0,
+                                    "calibration_end_ns": 1000.0} for r in range(3)], {"a": [0.5] * 3}, None, 3, 7)
+
+    def test_without_the_variable_the_machine_name_is_recorded(self):
+        self.assertEqual(self.record()["host"], platform.node())
+        self.assertEqual(baseline.baseline_data(self.record())["host"], platform.node())
+
+    def test_the_variable_is_recorded_in_the_record_and_the_baseline(self):
+        os.environ[baseline.HOST_VAR] = "ci-box"
+        self.assertEqual(self.record()["host"], "ci-box")
+        self.assertEqual(baseline.baseline_data(self.record())["host"], "ci-box")
+
+    def test_a_baseline_made_later_from_an_older_record_still_uses_the_variable(self):
+        old = self.record()
+        old["host"] = "REAL-HOSTNAME"
+        self.assertEqual(baseline.baseline_data(old)["host"], "REAL-HOSTNAME")
+        os.environ[baseline.HOST_VAR] = "  ci-box "
+        self.assertEqual(baseline.baseline_data(old)["host"], "ci-box")
+
+    def test_an_empty_variable_is_ignored(self):
+        os.environ[baseline.HOST_VAR] = " "
+        self.assertEqual(self.record()["host"], platform.node())
 
 
 class RecordTest(unittest.TestCase):
