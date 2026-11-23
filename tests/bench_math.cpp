@@ -783,6 +783,12 @@ void benchAtan2(sub0bench::BenchRunner& runner)
 int main(int argc, char** argv)
 {
     sub0bench::BenchRunner runner(argc, argv, "Sub0Math, 1024 elements per op");
+    // Deterministic metrics: layout facts that do not depend on the machine (judged by perf/metrics.json, never timed).
+    runner.metric("sizeof Vec3<double>", sizeof(Vec3<double>), "B");
+    runner.metric("sizeof Vec3<f64::Length>", sizeof(Vec3<f64::Length>), "B");
+    runner.metric("sizeof Vec4<double>", sizeof(Vec4<double>), "B");
+    runner.metric("sizeof SpatialMotiond", sizeof(SpatialMotiond), "B");
+    runner.metric("sizeof SpatialInertiad", sizeof(SpatialInertiad), "B");
     runner.bench().unit("1024 elements").minEpochIterations(30000);
 
     benchDot(runner, "dot, double", 1.0);

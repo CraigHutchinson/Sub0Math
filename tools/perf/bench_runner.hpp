@@ -3,7 +3,7 @@
 // Shared command line for Sub0 family benchmark executables (nanobench based).
 //
 //   <bench> [--filter <text>] [--exact <name>] [--epochs <n>] [--json <file>] [--soak <seconds>]
-//           [--list] [--calibration]
+//           [--list] [--calibration] [--metrics-only] [--smoke]
 //
 //   --filter       run only benchmarks whose name contains <text> (case-insensitive)
 //   --exact        run only the benchmark with exactly this name (bench_check.py interleaves with it)
@@ -19,6 +19,16 @@
 //                  report the median of its final quarter, the SUSTAINED speed. Some machines (a laptop in
 //                  Windows' "Best power efficiency" mode) hold boost for about 3 s and then fall to ~0.4x, and
 //                  only within one long-lived process: separate short processes each start at boost.
+//   --metrics-only run each selected workload once (no timing, no nanobench) and write the deterministic metrics
+//                  registered with BenchRunner::metric() as {"metrics":[{"name","value","unit","kind"}]} to the
+//                  --json file, or to stdout without one. `bench_check.py metrics` judges them against a spec.
+//   --smoke        run each selected workload once (one iteration, no timing) and report only through the exit
+//                  status: 0 when every workload ran, 1 when none matched. Never a timing verdict.
+//
+// Metrics. runner.metric("sizeof Vec3<double>", sizeof(Vec3<double>), "B") registers a value that does not depend on the
+// machine: kind exact (default; it must equal the spec's expected value) or max (a ceiling, such as iterations or bytes).
+// Call it before the runs, or inside a workload (which --metrics-only and --smoke execute once); the last value of a
+// name wins. Metrics are only written by --metrics-only.
 //
 // Include after defining ANKERL_NANOBENCH_IMPLEMENT in exactly one translation unit.
 
@@ -37,6 +47,12 @@
 
 namespace sub0bench
 {
+
+enum class MetricKind
+{
+    exact,
+    max,
+};
 
 class BenchRunner
 {
@@ -75,9 +91,17 @@ public:
             {
                 calibration_ = true;
             }
+            else if (arg == "--metrics-only")
+            {
+                metricsOnly_ = true;
+            }
+            else if (arg == "--smoke")
+            {
+                smoke_ = true;
+            }
             else
             {
-                std::fprintf(stderr, "usage: %s [--filter text] [--exact name] [--epochs n] [--json file] [--soak seconds] [--list] [--calibration]\n", argv[0]);
+                std::fprintf(stderr, "usage: %s [--filter text] [--exact name] [--epochs n] [--json file] [--soak seconds] [--list] [--calibration] [--metrics-only] [--smoke]\n", argv[0]);
                 std::exit(2);
             }
         }
@@ -94,6 +118,22 @@ public:
         return bench_;
     }
 
+    // Registers a deterministic metric (see the header comment). Re-registering a name replaces its value.
+    void metric(const char* name, double value, const char* unit, MetricKind kind = MetricKind::exact)
+    {
+        for (auto& m : metrics_)
+        {
+            if (m.name == name)
+            {
+                m.value = value;
+                m.unit = unit;
+                m.kind = kind;
+                return;
+            }
+        }
+        metrics_.push_back(Metric{name, unit, value, kind});
+    }
+
     template<typename Op>
     void run(const char* name, Op&& op)
     {
@@ -107,6 +147,11 @@ public:
             return;
         }
         ++selected_;
+        if (metricsOnly_ || smoke_)  // the workload once: its metric() calls register, a failure shows in the exit status
+        {
+            op();
+            return;
+        }
         if (soakSeconds_ > 0.0)
         {
             std::printf("soaking %s for %.1f s\n", name, soakSeconds_);
@@ -144,6 +189,15 @@ public:
             std::fprintf(stderr, "no benchmark matches the filter\n");
             return 1;
         }
+        if (metricsOnly_)
+        {
+            writeMetrics();
+            return 0;
+        }
+        if (smoke_)
+        {
+            return 0;
+        }
         if (!json_.empty() && calibration_ && sustainedSeconds_ > 0.0)
         {
             std::ofstream out(json_);  // the shape bench_check.py reads (name, batch, median(elapsed))
@@ -158,6 +212,60 @@ public:
     }
 
 private:
+    struct Metric
+    {
+        std::string name;
+        std::string unit;
+        double value;
+        MetricKind kind;
+    };
+
+    static std::string jsonText(const std::string& text)
+    {
+        std::string out = "\"";
+        for (const char c : text)
+        {
+            if (c == '"' || c == '\\')
+            {
+                out += '\\';
+                out += c;
+            }
+            else if (static_cast<unsigned char>(c) < 0x20)
+            {
+                char buffer[8];
+                std::snprintf(buffer, sizeof buffer, "\\u%04x", static_cast<unsigned>(c));
+                out += buffer;
+            }
+            else
+            {
+                out += c;
+            }
+        }
+        return out + "\"";
+    }
+
+    void writeMetrics() const
+    {
+        std::string text = "{\"metrics\":[";
+        for (std::size_t i = 0; i < metrics_.size(); ++i)
+        {
+            char number[40];
+            std::snprintf(number, sizeof number, "%.17g", metrics_[i].value);
+            text += (i ? "," : "");
+            text += "{\"name\":" + jsonText(metrics_[i].name) + ",\"value\":" + number + ",\"unit\":" + jsonText(metrics_[i].unit)
+                  + ",\"kind\":" + (metrics_[i].kind == MetricKind::max ? "\"max\"" : "\"exact\"") + "}";
+        }
+        text += "]}\n";
+        if (json_.empty())
+        {
+            std::fputs(text.c_str(), stdout);
+        }
+        else
+        {
+            std::ofstream(json_) << text;
+        }
+    }
+
     // A dependent chain: each step waits for the last, so its time tracks the clock, not memory or
     // vectorisation. The "__" prefix keeps it apart from real benchmarks.
     void runCalibration()
@@ -247,6 +355,7 @@ private:
 
     ankerl::nanobench::Bench bench_;
     std::vector<ankerl::nanobench::Result> results_;
+    std::vector<Metric> metrics_;
     std::string filter_;
     std::string json_;
     std::string exact_;
@@ -255,6 +364,8 @@ private:
     int epochs_ = 0;
     bool list_ = false;
     bool calibration_ = false;
+    bool metricsOnly_ = false;
+    bool smoke_ = false;
     int selected_ = 0;
 };
 

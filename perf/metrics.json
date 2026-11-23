@@ -1,0 +1,11 @@
+{
+  "schema": "sub0perf-metrics-spec-1",
+  "metrics": {
+    "sizeof Vec3<double>": {"kind": "exact", "expected": 24, "unit": "B"},
+    "sizeof Vec3<f64::Length>": {"kind": "exact", "expected": 24, "unit": "B"},
+    "sizeof Vec4<double>": {"kind": "exact", "expected": 32, "unit": "B"},
+    "sizeof SpatialMotiond": {"kind": "exact", "expected": 48, "unit": "B"},
+    "sizeof SpatialInertiad": {"kind": "exact", "expected": 104, "unit": "B"}
+  },
+  "accepted": []
+}

@@ -5,7 +5,7 @@
 #   sub0math_target_deterministic_fp(<target> [INTERFACE|PUBLIC|PRIVATE])
 #       Forbids fused multiply-add contraction so results are bit-identical across -march levels and
 #       compilers (-ffp-contract=off, /fp:precise). Default scope PRIVATE; see docs/PERFORMANCE.md.
-#   sub0math_add_benchmark(<target> <sources>...)
+#   sub0math_add_benchmark(<target> <sources>... [METRICS <spec>] [SMOKE_TEST])
 #       Builds a nanobench executable using tools/perf/bench_runner.hpp, plus these targets:
 #         <target>_json             run it once and write build/perf/<target>.json (nanobench format)
 #         <target>_runs             SUB0MATH_BENCH_REPEATS interleaved, calibrated rounds -> <target>.samples.json
@@ -18,6 +18,14 @@
 #       and installs the pre-push gate and post-checkout hooks (SUB0MATH_PERF_GIT_HOOKS, off on CI),
 #       and, unless SUB0MATH_PERF_ON_BUILD is OFF, a quick check after every rebuild of <target>
 #       (its code or a header it uses changed), reporting regressions and progressions implicitly.
+#         <target>_compare          interleaved A/B (>= 10 rounds) of this build against the newest kept build that differs
+#                                   (.git/sub0perf/bins), or SUB0MATH_COMPARE_AGAINST=<exe>; SUB0MATH_COMPARE_FILTER=<text>
+#                                   limits it; brief output under SUB0PERF_OUTPUT=brief (docs/PERF_LOOP.md)
+#       SMOKE_TEST: registers ctest test <target>_smoke (`<target> --smoke`: every workload once, exit status only).
+#       METRICS <spec>: <spec> (relative to the project root, e.g. perf/metrics.json) holds the deterministic metrics the
+#       executable reports with BenchRunner::metric(); registers ctest test <target>_metrics (`bench_check.py metrics`)
+#       and the target <target>_metrics_accept (moves the spec to the measured values; reason in SUB0MATH_PERF_REASON).
+#       Both tests carry the ctest label "smoke" and never time anything, so they are safe in `ctest` and CI.
 #         <target>_vtune_hotspots   VTune hotspots      (SUB0MATH_PROFILE_FILTER, _SECONDS)
 #         <target>_vtune_uarch      VTune microarchitecture exploration
 #         <target>_advisor_roofline Intel Advisor vectorization survey and roofline
@@ -149,12 +157,23 @@ function(sub0math_add_test name)
 endfunction()
 
 function(sub0math_add_benchmark target)
+    cmake_parse_arguments(PARSE_ARGV 1 B "SMOKE_TEST" "METRICS" "")
+    set(sources ${B_UNPARSED_ARGUMENTS})
+    if(NOT sources)
+        message(FATAL_ERROR "sub0math_add_benchmark(<target> <sources>... [METRICS <spec>] [SMOKE_TEST]): sources are required")
+    endif()
     get_filename_component(tooling "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/perf" ABSOLUTE)
     get_filename_component(vendor "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tests/vendor" ABSOLUTE)
-    add_executable(${target} ${ARGN})
+    add_executable(${target} ${sources})
     target_include_directories(${target} SYSTEM PRIVATE "${tooling}" "${vendor}")
     target_compile_features(${target} PRIVATE cxx_std_23)
     sub0math_target_perf_options(${target})
+
+    # Smoke: every workload once, exit status only (never timing), so it belongs in ctest and CI.
+    if(B_SMOKE_TEST)
+        add_test(NAME ${target}_smoke COMMAND $<TARGET_FILE:${target}> --smoke)
+        set_tests_properties(${target}_smoke PROPERTIES LABELS "smoke")
+    endif()
 
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(NOT Python3_Interpreter_FOUND)
@@ -181,6 +200,40 @@ function(sub0math_add_benchmark target)
     add_custom_target(${target}_baseline
         COMMAND ${Python3_EXECUTABLE} "${check}" baseline --results "${samples}" --baseline "${baseline}"
         DEPENDS ${target}_runs USES_TERMINAL VERBATIM)
+
+    # Interleaved A/B against a kept build, or SUB0MATH_COMPARE_AGAINST (docs/PERF_LOOP.md, step 3).
+    set(SUB0MATH_COMPARE_AGAINST "" CACHE FILEPATH "<target>_compare: compare against this executable instead of the newest kept build")
+    set(SUB0MATH_COMPARE_FILTER "" CACHE STRING "<target>_compare: only benchmarks (and their groups) whose name contains this text")
+    set(compare_args --exe $<TARGET_FILE:${target}> --target ${target} --repo "${PROJECT_SOURCE_DIR}" --rounds 10)
+    if(SUB0MATH_COMPARE_AGAINST)
+        list(APPEND compare_args --against "${SUB0MATH_COMPARE_AGAINST}")
+    else()
+        list(APPEND compare_args --kept)
+    endif()
+    if(SUB0MATH_COMPARE_FILTER)
+        list(APPEND compare_args --filter "${SUB0MATH_COMPARE_FILTER}")
+    endif()
+    add_custom_target(${target}_compare
+        COMMAND ${Python3_EXECUTABLE} "${check}" compare ${compare_args}
+        DEPENDS ${target} USES_TERMINAL VERBATIM)
+
+    # Deterministic metrics (exact or maximum values; no timing): a ctest test and an accept target.
+    if(B_METRICS)
+        if(IS_ABSOLUTE "${B_METRICS}")
+            set(metrics_spec "${B_METRICS}")
+        else()
+            set(metrics_spec "${PROJECT_SOURCE_DIR}/${B_METRICS}")
+        endif()
+        set(metrics_out "${CMAKE_BINARY_DIR}/perf/${target}.metrics.json")
+        add_test(NAME ${target}_metrics
+                 COMMAND ${Python3_EXECUTABLE} "${check}" metrics --exe $<TARGET_FILE:${target}> --spec "${metrics_spec}"
+                         --out "${metrics_out}")
+        set_tests_properties(${target}_metrics PROPERTIES LABELS "smoke")
+        add_custom_target(${target}_metrics_accept
+            COMMAND ${Python3_EXECUTABLE} "${check}" accept --exe $<TARGET_FILE:${target}> --spec "${metrics_spec}"
+                    --out "${metrics_out}" --all-changed
+            DEPENDS ${target} USES_TERMINAL VERBATIM)
+    endif()
 
     # Implicit report: the executable relinks only when its code, or a header it uses, changed.
     if(NOT SUB0MATH_PERF_ON_BUILD STREQUAL "OFF")
