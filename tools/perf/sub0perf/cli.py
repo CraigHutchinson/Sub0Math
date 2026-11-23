@@ -14,7 +14,7 @@ noise, and paired comparisons with hand-written references.
   bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH  [--pin file=F,var=V,repo=owner/name ...]
 
 Output contract. `check`, `auto`, `gate`, `compare` and `metrics` take `--format brief|json|md` (default md, or SUB0PERF_OUTPUT) and
-`--report PATH`. brief is one verdict line plus one line per row changed beyond noise; json is one `sub0perf-outcome-1` object; the
+`--report PATH`. `--out-json PATH` (or SUB0PERF_OUTCOME_JSON) also writes the json outcome to a file, whatever the format. brief is one verdict line plus one line per row changed beyond noise; json is one `sub0perf-outcome-1` object; the
 full tables go to the report file. See docs/PERFORMANCE.md, "Output contract".
 
 How a run is made robust (`run`, and `auto` which runs then checks):
@@ -271,6 +271,8 @@ def main():
     parser.add_argument("--format", choices=list(output.FORMATS), default=None,
                         help="check, auto, gate, compare, metrics: brief (one verdict line plus a line per change beyond noise), json "
                              "(schema sub0perf-outcome-1) or md (the full tables). Default: SUB0PERF_OUTPUT, else md")
+    parser.add_argument("--out-json", metavar="PATH", help="check, auto, gate, compare, metrics: also write the sub0perf-outcome-1 JSON here, "
+                        "whatever --format is (default: SUB0PERF_OUTCOME_JSON); a run with no verdict writes status NO_VERDICT")
     parser.add_argument("--report", metavar="PATH", help="check, auto, gate, compare, metrics: write the full markdown report here "
                         "(brief and json always write one; the default sits beside the samples file or executable)")
     parser.add_argument("--against", metavar="EXE", help="compare: the build to compare --exe against")
@@ -327,8 +329,17 @@ def main():
     commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
                 "accept": accept_command, "gate": gate_command, "compare": compare_command, "metrics": metrics_command, "install-hooks": install_hooks_command,
                 "note-checkout": note_checkout_command, "selftest": selftest_command, "power": power_command}
-    if args.command in ("auto", "gate"):  # long runs: chatter goes to a log in brief and json (output.Quiet)
-        with output.Quiet(args.format, output.quiet_log_path(args)) as quiet:
-            quiet.exit_code = commands[args.command](args)
-            return quiet.exit_code
-    return commands[args.command](args)
+    out_json = output.resolve_out_json(args) if args.command in output.OUTCOME_COMMANDS else None
+    output.begin_outcome_file(out_json)
+    code = None
+    try:
+        if args.command in ("auto", "gate"):  # long runs: chatter goes to a log in brief and json (output.Quiet)
+            with output.Quiet(args.format, output.quiet_log_path(args)) as quiet:
+                quiet.exit_code = commands[args.command](args)
+                code = quiet.exit_code
+            return code
+        code = commands[args.command](args)
+        return code
+    finally:
+        if out_json:
+            output.end_outcome_file(args.command, code)

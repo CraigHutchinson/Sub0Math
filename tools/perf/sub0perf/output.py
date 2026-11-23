@@ -10,6 +10,9 @@ Three formats, chosen by `--format` (default: `SUB0PERF_OUTPUT`, else `md`):
   next_action), mirroring `sub0perf-workload-outcome-1`.
 - `md`: the full markdown tables on stdout, as before.
 
+`--out-json PATH` (or SUB0PERF_OUTCOME_JSON) writes the same `sub0perf-outcome-1` object to a file whatever `--format` is, so a
+runner (local_ci's `perf_outcome`) reads it without parsing stdout. A run that reached no verdict writes `status: "NO_VERDICT"`.
+
 The full markdown tables go to the `--report <path>` file (brief and json always write one; a default path is chosen
 when none is given). Progress chatter of a long run (`auto`, `gate`) is held back in brief and json: it goes to
 `<report>.log`, and only the lines that matter (refusals, warnings, failures) are echoed after the verdict.
@@ -28,6 +31,8 @@ from .judge import verdict_hits
 FORMATS = ("brief", "json", "md")
 OUTCOME_SCHEMA = "sub0perf-outcome-1"
 ENV_VAR = "SUB0PERF_OUTPUT"
+OUT_JSON_VAR = "SUB0PERF_OUTCOME_JSON"
+OUTCOME_COMMANDS = ("check", "auto", "gate", "compare", "metrics")  # the commands that write an outcome
 # Lines of a quieted run that are still shown after the verdict.
 IMPORTANT = ("refused", "blocked", "WARNING", "failed", "FAIL", "deferred", "error")
 
@@ -39,6 +44,50 @@ def resolve_format(args):
         return chosen
     env = os.environ.get(ENV_VAR, "").strip().lower()
     return env if env in FORMATS else "md"
+
+
+_sink = {"path": None, "data": None}  # the --out-json file of the running command, and the outcome written to it
+
+
+def resolve_out_json(args):
+    """`--out-json`, else SUB0PERF_OUTCOME_JSON, else None."""
+    return getattr(args, "out_json", None) or os.environ.get(OUT_JSON_VAR, "").strip() or None
+
+
+def begin_outcome_file(path):
+    """Starts writing the running command's outcome to `path` (None: not asked for)."""
+    _sink["path"], _sink["data"] = (str(path) if path else None), None
+
+
+def record_outcome(data):
+    """Writes `data` (a sub0perf-outcome-1 object) to the outcome file, if one was asked for. The last outcome of a run wins."""
+    _sink["data"] = data
+    _write_outcome_file()
+
+
+def _write_outcome_file():
+    if not _sink["path"] or _sink["data"] is None:
+        return
+    try:
+        atomic_write_text(_sink["path"], json.dumps(_sink["data"]) + "\n")
+    except OSError as error:
+        print(f"sub0perf: could not write the outcome file {_sink['path']} ({error})", file=sys.stderr)
+
+
+def no_verdict(command, exit_code, log=()):
+    return {"schema": OUTCOME_SCHEMA, "command": command, "status": "NO_VERDICT", "exit": exit_code, "counts": None,
+            "changed": [], "report": None, "next_action": "", **({"log": list(log)} if log else {})}
+
+
+def end_outcome_file(command, exit_code, log=()):
+    """Closes the outcome file: a run that printed no outcome gets NO_VERDICT; the exit status is the command's own."""
+    if _sink["path"]:
+        if _sink["data"] is None:
+            _sink["data"] = no_verdict(command, exit_code, log)
+        else:
+            _sink["data"] = {**_sink["data"], "exit": exit_code}
+        _write_outcome_file()
+    _sink["path"], _sink["data"] = None, None
 
 
 def default_report_path(args, stem=None):
@@ -173,20 +222,21 @@ def _emit(fmt, command, counts, changed, text, path, args, exit_code, results, l
     state = status_of(counts)
     if fmt == "md":
         print(text)
-        if getattr(args, "report", None):
-            write_report(path, text)
+        written = write_report(path, text) if getattr(args, "report", None) else None
         print(f"\nperf: {counts['regressed']} regressed, {counts['improved']} improved, {counts['inconclusive']} inconclusive")
+        record_outcome(outcome(command, state, exit_code, counts, changed, written, next_action(command, counts, args, results)))
         return None
     written = write_report(path, text)
     action = next_action(command, counts, args, results)
+    data = outcome(command, state, exit_code, counts, changed, written, action)
+    record_outcome(data)
     if fmt == "json":
-        data = outcome(command, state, exit_code, counts, changed, written, action)
         print(json.dumps(data))
         return data
     print(f"{label or 'perf'}: {state} {verdict_text(counts)}" + (f"; report {written}" if written else ""))
     for entry in changed:
         print(brief_line(entry))
-    return outcome(command, state, exit_code, counts, changed, written, action)
+    return data
 
 
 ACTIVE = None  # the Quiet block currently holding output back, if any
@@ -244,8 +294,7 @@ class Quiet:
                 pass
         if self.fmt == "json":
             if not self.spoke:
-                print(json.dumps({"schema": OUTCOME_SCHEMA, "command": None, "status": "NO_VERDICT", "exit": self.exit_code, "counts": None,
-                                  "changed": [], "report": None, "next_action": "", "log": lines[-15:]}))
+                print(json.dumps({**no_verdict(None, self.exit_code), "log": lines[-15:]}))
             return False
         shown = [line for line in lines if any(k in line for k in IMPORTANT)] if self.spoke else lines[-15:]
         for line in shown[:15]:

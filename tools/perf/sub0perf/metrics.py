@@ -170,16 +170,18 @@ def metrics_command(args):
     if blocked or counts["new"]:
         action = (f"fix the code; if the new value is intended: python <tooling>/bench_check.py accept --results {args.results} "
                   f"--spec {args.spec} --metric <name> --reason \"<why>\" (commit the spec with the change)")
+    changed = [{"name": n, "kind": "metric", "verdict": s, "detail": d} for n, s, d in shown]
     if fmt == "md":
         print(text)
-        if getattr(args, "report", None):
-            output.write_report(path, text)
+        written = output.write_report(path, text) if getattr(args, "report", None) else None
         print(f"\nperf metrics: {status} {brief_summary(counts)}")
+        output.record_outcome(output.outcome("metrics", status, code, counts, changed, written, action))
         return code
     written = output.write_report(path, text)
+    data = output.outcome("metrics", status, code, counts, changed, written, action)
+    output.record_outcome(data)
     if fmt == "json":
-        changed = [{"name": n, "kind": "metric", "verdict": s, "detail": d} for n, s, d in shown]
-        print(json.dumps(output.outcome("metrics", status, code, counts, changed, written, action)))
+        print(json.dumps(data))
         return code
     print(f"perf metrics: {status} {brief_summary(counts)}" + (f"; report {written}" if written else ""))
     for name, state, detail in shown:

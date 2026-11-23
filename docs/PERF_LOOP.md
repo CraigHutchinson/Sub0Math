@@ -59,7 +59,8 @@ REGRESSED index/cold 1e5: +14.2% (noise 2.1%, tol 10%)
 ```
 
 The first line is the whole verdict. Open the report only to see a row the lines do not explain. For a machine reader,
-`--format json` prints one object (`sub0perf-outcome-1`: `status`, `exit`, `counts`, `changed[]`, `report`, `next_action`);
+`--format json` prints one object (`sub0perf-outcome-1`: `status`, `exit`, `counts`, `changed[]`, `report`, `next_action`), and
+`--out-json PATH` (env `SUB0PERF_OUTCOME_JSON`) writes it to a file whatever the format (check, auto, gate, compare, metrics);
 `next_action` is the command to run next. Exit status: 0 PASS, 1 FAIL, 2 unusable input (nothing judged).
 
 ## Rules that stay

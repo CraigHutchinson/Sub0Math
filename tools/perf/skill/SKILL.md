@@ -30,7 +30,7 @@ on a quiet machine; never run two measuring commands at once (they take a lock).
 Exact facts (sizes, counts, iterations) are checked without timing: `ctest --test-dir B -L smoke`. A deliberate change:
 `SUB0MATH_PERF_REASON="<why>" cmake --build B --target T_metrics_accept`, then commit `perf/metrics.json`.
 
-Machine output: add `--format json` (schema `sub0perf-outcome-1`: `status`, `exit`, `counts`, `changed[]`, `report`, `next_action`). Open the
+Machine output: add `--format json` (schema `sub0perf-outcome-1`: `status`, `exit`, `counts`, `changed[]`, `report`, `next_action`), or `--out-json PATH` (env `SUB0PERF_OUTCOME_JSON`) to write the same object to a file whatever the format. Open the
 report file only when a line does not explain itself. Exit: 0 PASS, 1 FAIL, 2 unusable input.
 
 Do not: accept a regression to get a pass; change several things at once; use `--no-verify` or the bypass variables; edit the baseline by hand.

@@ -575,6 +575,14 @@ Without either, the format is `md`, as before.
   prints `status: "NO_VERDICT"` with the last lines in `log`.
 - **md**: the full markdown tables on stdout.
 
+**The outcome file.** `--out-json PATH` (or the environment variable `SUB0PERF_OUTCOME_JSON`; the flag wins) on `check`, `auto`,
+`gate`, `compare` and `metrics` also writes the `sub0perf-outcome-1` object to `PATH`, whatever `--format` is, so a runner
+reads a file instead of parsing stdout: `local_ci.py`'s `"perf_outcome": "{builddir}/perf-outcome.json"` needs only
+`bench_check.py gate --level full --out-json {builddir}/perf-outcome.json`. The directory is created and the file replaced
+atomically. A run that reached no verdict (a deferral, a refusal, unusable input, a crash) writes `status: "NO_VERDICT"`
+with the command's own `exit`; `exit` is always the process's exit status. A command that never reaches an outcome writes
+no file unless asked.
+
 The full markdown tables go to the report file, `--report <path>` (brief and json always write one; the default sits
 beside the samples file, `X.report.md`, or beside the executable, `<exe>.compare.md`; the gate uses
 `<build>/perf/<target>.report.md`). `GITHUB_STEP_SUMMARY` still gets the tables. In brief and json the chatter of a long

@@ -111,6 +111,92 @@ class OutputContractTest(unittest.TestCase):
         self.assertIn(str(target), text)
 
 
+class OutcomeFileTest(unittest.TestCase):
+    """`--out-json PATH` / SUB0PERF_OUTCOME_JSON: the sub0perf-outcome-1 object in a file, whatever the format on stdout."""
+
+    def setUp(self):
+        patch = mock.patch.dict(os.environ, {}, clear=False)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for var in (output.ENV_VAR, output.OUT_JSON_VAR, "GITHUB_STEP_SUMMARY"):
+            os.environ.pop(var, None)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / "base.json").write_text(json.dumps(baseline_data(record(BASE))), encoding="utf-8")
+        write_samples(self.dir / "X.samples.json", record({**BASE, "H, vocab": 650.0}, seed=5))
+        self.out = self.dir / "sub" / "outcome.json"
+
+    def main(self, *extra, command="check"):
+        argv = ["bench_check.py", command, "--results", str(self.dir / "X.samples.json"), "--baseline", str(self.dir / "base.json"), *extra]
+        out = io.StringIO()
+        with mock.patch("sys.argv", argv), contextlib.redirect_stdout(out):
+            code = cli.main()
+        return code, out.getvalue()
+
+    def read(self):
+        return json.loads(self.out.read_text(encoding="utf-8"))
+
+    def test_every_format_writes_the_same_outcome_file(self):
+        outcomes = []
+        for fmt in ("md", "brief", "json"):
+            code, text = self.main("--format", fmt, "--out-json", str(self.out))
+            data = self.read()
+            self.assertEqual((code, data["schema"], data["status"], data["exit"]), (1, output.OUTCOME_SCHEMA, "FAIL", 1), fmt)
+            self.assertEqual(data["counts"]["regressed"], 1)
+            self.assertIn("accept", data["next_action"])
+            outcomes.append(data)
+            if fmt == "json":
+                self.assertEqual(json.loads(text), data)  # stdout and file agree
+        self.assertEqual(outcomes[1]["changed"], outcomes[2]["changed"])
+        self.assertEqual(outcomes[0]["changed"], outcomes[2]["changed"])
+
+    def test_the_environment_variable_is_honoured_and_the_flag_wins(self):
+        os.environ[output.OUT_JSON_VAR] = str(self.out)
+        self.main("--format", "brief")
+        self.assertEqual(self.read()["status"], "FAIL")
+        other = self.dir / "flag.json"
+        self.main("--format", "brief", "--out-json", str(other))
+        self.assertTrue(other.is_file())
+
+    def test_a_passing_run_writes_pass_and_report_only_keeps_the_exit_zero(self):
+        write_samples(self.dir / "X.samples.json", record(BASE, seed=5))
+        self.main("--out-json", str(self.out))
+        self.assertEqual((self.read()["status"], self.read()["exit"]), ("PASS", 0))
+        write_samples(self.dir / "X.samples.json", record({**BASE, "H, vocab": 650.0}, seed=5))
+        code, _ = self.main("--out-json", str(self.out), "--report-only")
+        self.assertEqual((code, self.read()["exit"], self.read()["status"]), (0, 0, "FAIL"))
+
+    def test_without_the_flag_no_file_is_written(self):
+        self.main("--format", "json")
+        self.assertFalse(self.out.exists())
+
+    def test_a_run_with_no_verdict_writes_no_verdict(self):
+        spec = self.dir / "bad.json"
+        spec.write_text("{}", encoding="utf-8")
+        argv = ["bench_check.py", "metrics", "--spec", str(spec), "--results", str(self.dir / "missing.json"), "--out-json", str(self.out)]
+        with mock.patch("sys.argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main()
+        data = self.read()
+        self.assertEqual((code, data["status"], data["exit"], data["command"]), (2, "NO_VERDICT", 2, "metrics"))
+
+    def test_metrics_writes_the_outcome_in_md_too(self):
+        spec = self.dir / "spec.json"
+        spec.write_text(json.dumps({"schema": "sub0perf-metrics-spec-1", "metrics": {"size": {"kind": "exact", "expected": 24}}}), encoding="utf-8")
+        results = self.dir / "m.json"
+        results.write_text(json.dumps({"metrics": [{"name": "size", "value": 32, "unit": "", "kind": "exact"}]}), encoding="utf-8")
+        argv = ["bench_check.py", "metrics", "--spec", str(spec), "--results", str(results), "--format", "md", "--out-json", str(self.out)]
+        with mock.patch("sys.argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main()
+        data = self.read()
+        self.assertEqual((code, data["command"], data["status"], data["counts"]["failed"]), (1, "metrics", "FAIL", 1))
+
+    def test_the_file_is_not_written_by_commands_that_have_no_outcome(self):
+        with mock.patch("sys.argv", ["bench_check.py", "power", "--out-json", str(self.out)]), contextlib.redirect_stdout(io.StringIO()):
+            cli.main()
+        self.assertFalse(self.out.exists())
+
+
 class QuietTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
