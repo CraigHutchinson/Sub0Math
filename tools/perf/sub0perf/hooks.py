@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -77,6 +78,32 @@ def chain_line(name):
     return f'[ ! -f {target} ] || sh {target} "$@" || exit $?'
 
 
+GATE_CALL_RE = re.compile(r'bench_check\.py"?\s+gate\b')
+TOOLING_RECORD = "sub0math_tooling_dir.txt"  # written by the configure step into the build directory: the tooling's location
+TOOLING_ENV = "SUB0PERF_TOOLING_DIR"  # overrides the record
+
+
+def direct_gate_lines(text):
+    """The active (not commented out) lines of a hand-written hook that run `bench_check.py gate` themselves: the shared pre-push
+    template's perf stanza. That hook reads the pushed refs from stdin itself, so it is wired without the chain line."""
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#") and GATE_CALL_RE.search(line)]
+
+
+def tooling_dirs(repo, environ=None):
+    """The tooling directories the template's stanza would use: SUB0PERF_TOOLING_DIR, then the newest record under `build*/` and
+    `build/*/` (a preset's build directory is build/<preset>)."""
+    environ = os.environ if environ is None else environ
+    found = [Path(environ[TOOLING_ENV].strip())] if environ.get(TOOLING_ENV, "").strip() else []
+    records = {p for pattern in (f"build*/{TOOLING_RECORD}", f"build/*/{TOOLING_RECORD}") for p in Path(repo).glob(pattern)}
+    for record in sorted(records, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            found.append(Path(record.read_text(encoding="utf-8").strip()))
+        except OSError:
+            continue
+    return found
+
+
 def chained_in(text, name):
     """True when a hook's text already calls the chained copy."""
     return f"sub0perf/{CHAIN_DIR}/{name}" in text
@@ -139,7 +166,11 @@ def install_hooks_command(args):
             existing = hooks / name
             if existing.is_file() and chained_in(existing.read_text(encoding="utf-8", errors="replace"), name):
                 continue  # the committed hook already runs ours
-            print(f"sub0perf: {why}; left {name} alone. Add this line to {existing} (before anything reads stdin):\n  {chain_line(name)}")
+            if name == "pre-push" and existing.is_file() and direct_gate_lines(existing.read_text(encoding="utf-8", errors="replace")):
+                continue  # the committed hook runs the gate itself (the shared template's stanza): that is a wiring too
+            print(f"sub0perf: {why}; left {name} alone. Add this line to {existing} (before anything reads stdin; not for a hook that "
+                  f"reads the refs on stdin itself, such as the shared pre-push template: that one runs `bench_check.py gate "
+                  f"--refs-from-stdin` itself, see its perf stanza):\n  {chain_line(name)}")
         return 0
     hooks.mkdir(parents=True, exist_ok=True)
     for name, comment in HOOK_COMMENTS.items():

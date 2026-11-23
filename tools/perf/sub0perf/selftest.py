@@ -3,7 +3,9 @@
 Each check is a row (status, check, detail); PASS, WARN (worth knowing, not wrong) or FAIL (the gate would misbehave).
 
 - hook: the pre-push hook is installed where git looks for it, calls an existing bench_check.py, and is what
-  `install-hooks` writes for this tooling (drift is reported); the post-checkout hook likewise.
+  `install-hooks` writes for this tooling (drift is reported); the post-checkout hook likewise. In a tracked hooks directory
+  the committed pre-push is wired when it carries the chain line, or when it runs `bench_check.py gate --refs-from-stdin` itself
+  (the shared template's perf stanza).
 - config: `.git/sub0perf/config.json` is valid; each target's build dir, executable and baseline exist (a build that is
   not there yet is a warning), pins and settings parse.
 - decisions: the real `gate_command` is driven with synthetic pushes in its plan-only mode, which stops before the pins'
@@ -57,7 +59,8 @@ def check_hook(repo, name, required):
 
     A hook directory inside the worktree (core.hooksPath, for example `.githooks`: tracked, so never written by install-hooks)
     or SUB0MATH_PERF_HOOK_MODE=chain keeps ours in .git/sub0perf/hooks, run by one line of the committed hook: that line must be
-    there, and the copy must be what install-hooks writes.
+    there, and the copy must be what install-hooks writes. Or the committed hook runs `bench_check.py gate --refs-from-stdin`
+    itself (the shared template's perf stanza): the other valid wiring, and the one for a hook that reads stdin itself.
     """
     d = hooks_dir(repo)
     path = d / name
@@ -70,14 +73,50 @@ def check_hook(repo, name, required):
         if not copy.is_file():
             return [(FAIL, label, f"{path} chains to {copy}, which does not exist; run install-hooks (or configure the build)")]
         return _inspect(copy, name, f"{label} (chained from {path.name})", True)
+    if name == "pre-push" and text is not None and hooks.HOOK_MARK not in text and hooks.direct_gate_lines(text):
+        return _inspect_direct(repo, path, label, text)
     if tracked or os.environ.get(hooks.MODE_VAR, "").strip().lower() == "chain":
         where = "tracked hooks directory" if tracked else f"{hooks.MODE_VAR}=chain"
         if text is None:
             return [(FAIL if required else WARN, label, f"{where}: {path} does not exist, so git runs no {name}; add it with this line: {line}")]
-        return [(FAIL if required else WARN, label, f"{where}: {path} does not run sub0perf; add this line to it: {line}")]
+        return [(FAIL if required else WARN, label, f"{where}: {path} does not run sub0perf; either add this line to it (a hook that does not read stdin itself): {line} "
+                                                            f"-- or, for a hook that reads the pushed refs itself, run `bench_check.py gate --refs-from-stdin` in it (the shared pre-push template's perf stanza)")]
     if text is None:
         return [(FAIL if required else WARN, label, f"not installed in {d} (git looks there; configure the build or run install-hooks)")]
     return _inspect(path, name, label, required)
+
+
+BENCH_CHECK_PATH_RE = re.compile(r"""[^\s"'=]*bench_check\.py""")
+
+
+def _inspect_direct(repo, path, label, text):
+    """Rows for a hand-written hook that runs `bench_check.py gate` itself (the shared pre-push template's perf stanza).
+
+    That is a valid wiring, the other being the chain line: the template's hook reads the pushed refs from stdin in its own loop and
+    hands them to the gate (`--refs-from-stdin`), so the chain line (whose copy reads all of stdin first) must not be added to it.
+    """
+    rows = []
+    if os.name == "posix" and not os.access(path, os.X_OK):
+        rows.append((FAIL, label, f"{path} is not executable, so git ignores it"))
+    lines = hooks.direct_gate_lines(text)
+    if not any("--refs-from-stdin" in line for line in lines):
+        rows.append((WARN, label, f"{path} runs the gate without --refs-from-stdin, so it cannot see what is pushed"))
+    literal = [m for line in lines for m in BENCH_CHECK_PATH_RE.findall(line)
+               if m != "bench_check.py" and "$" not in m]  # a path in the hook, not one built from a variable
+    found = []
+    if literal:  # a path written into the hook
+        missing = [m for m in literal if not (Path(m).is_file() or (Path(repo) / m).is_file())]
+        if missing:
+            rows.append((FAIL, label, f"{path} runs {missing[0]}, which does not exist"))
+    else:  # the template's way: the tooling directory is looked up at run time
+        found = [d for d in hooks.tooling_dirs(repo) if (d / "bench_check.py").is_file()]
+        if not found:
+            rows.append((WARN, label, f"{path} runs the gate itself, but no tooling record ({hooks.TOOLING_RECORD} under build*/ or build/*/) "
+                                      f"or {hooks.TOOLING_ENV} names an existing bench_check.py yet: the hook skips the gate until the build is configured"))
+    if not rows:
+        where = f"tooling {found[0]}" if found else "tooling named in the hook"
+        rows.append((PASS, label, f"{path}: runs `bench_check.py gate` itself (the pre-push template's stanza; no chain line needed); {where}"))
+    return rows
 
 
 def _inspect(path, name, label, required):

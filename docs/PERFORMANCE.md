@@ -220,7 +220,7 @@ It prints a table of PASS, WARN and FAIL rows and exits 1 on any FAIL. Consumers
 
 | Check | Passes when |
 |---|---|
-| `hook pre-push`, `hook post-checkout` | The hook is in the directory git looks in (`core.hooksPath` honoured), is a sub0perf hook, calls an existing `bench_check.py` and an existing python, and is byte-identical to what `install-hooks` writes for this tooling. Other python or script paths with the same logic are a WARN; a changed hook is a FAIL (drift: re-run `install-hooks`). In a tracked hooks directory, or under `SUB0MATH_PERF_HOOK_MODE=chain`, the committed hook must carry the one chaining line and `.git/sub0perf/hooks/<hook>` must match (FAIL otherwise, with the line to add) |
+| `hook pre-push`, `hook post-checkout` | The hook is in the directory git looks in (`core.hooksPath` honoured), is a sub0perf hook, calls an existing `bench_check.py` and an existing python, and is byte-identical to what `install-hooks` writes for this tooling. Other python or script paths with the same logic are a WARN; a changed hook is a FAIL (drift: re-run `install-hooks`). In a tracked hooks directory, or under `SUB0MATH_PERF_HOOK_MODE=chain`, the committed hook must either carry the one chaining line (and `.git/sub0perf/hooks/<hook>` must match) or run `bench_check.py gate --refs-from-stdin` itself, the shared `templates/pre-push` stanza (PASS; WARN without `--refs-from-stdin`, or while no tooling record exists yet; FAIL for a literal path that does not exist). Neither is a FAIL, with both wirings named, and the chaining line to add |
 | `config`, `target <name>`, `baseline` | `.git/sub0perf/config.json` parses; the baseline exists and has benchmarks. A missing build dir or executable is a WARN ("not built yet") |
 | `pin <name>`, `config full_refs/quick_budget` | Pin entries have file and var and repo or checkout, the file exists and its `set(VAR <sha>)` parses; settings have the right type |
 | `gate: empty stdin`, `deletion only`, `docs-only range` | The real `gate_command` skips each, with synthetic refs |
@@ -331,8 +331,20 @@ a hook prints a message and does nothing instead of failing.
 
 **A tracked hooks directory is never touched.** When `core.hooksPath` points inside the worktree (for example
 `.githooks`), its files are committed and shared, so install-hooks does not rename or overwrite them, and does not add
-files there. Our hooks are kept in `.git/sub0perf/hooks/<hook>` (never tracked) and install-hooks prints the one line to add
-to the committed hook, before anything reads stdin:
+files there. Two wirings are valid for the committed `pre-push`, and `selftest` accepts either:
+
+1. **The hook runs the gate itself.** A hand-written hook that reads the pushed refs from stdin (a loop over `read`, as the shared
+   `templates/pre-push` of the `.github` repository does to skip documentation-only pushes) and runs
+   `bench_check.py gate --refs-from-stdin` with them: the template's commented perf stanza, which finds the tooling in
+   `SUB0PERF_TOOLING_DIR` or the newest `<build>/sub0math_tooling_dir.txt` under `build*/` and `build/*/` (a preset's build
+   directory is `build/<preset>`). This is the wiring for a hook that reads stdin, because stdin can be read once.
+2. **The chain line.** For a committed hook that does not read stdin itself, or for an untracked `.git/hooks` under
+   `SUB0MATH_PERF_HOOK_MODE=chain`. Our hooks are kept in `.git/sub0perf/hooks/<hook>` (never tracked) and install-hooks prints
+   the one line to add to the committed hook, before anything reads stdin. Do not add it to a hook of the first kind: the
+   chained copy reads all of stdin first, and the hook's own loop then sees no refs. install-hooks prints nothing for a
+   committed `pre-push` that already runs the gate itself.
+
+The chain line:
 
 ```sh
 [ ! -f "$(git rev-parse --path-format=absolute --git-common-dir)/sub0perf/hooks/pre-push" ] || sh "$(git rev-parse --path-format=absolute --git-common-dir)/sub0perf/hooks/pre-push" "$@" || exit $?

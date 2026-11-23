@@ -271,5 +271,93 @@ class TrackedHooksSelftestTest(SelftestCase):
         self.assertIn("does not exist", detail)
 
 
+TEMPLATE_STANZA = """#!/usr/bin/env bash
+set -euo pipefail
+refs=''
+while read -r local_ref local_sha remote_ref remote_sha; do refs+="$local_ref $local_sha $remote_ref $remote_sha"$'\n'; done
+tooling="${SUB0PERF_TOOLING_DIR:-}"
+if [ -z "$tooling" ]; then
+    for record in $(ls -t build*/sub0math_tooling_dir.txt build/*/sub0math_tooling_dir.txt 2>/dev/null); do
+        tooling="$(cat "$record")"; break
+    done
+fi
+if ! SUB0PERF_OUTPUT=brief python "$tooling/bench_check.py" gate --refs-from-stdin <<<"$refs"; then exit 1; fi
+"""
+
+
+class DirectGateWiringTest(TrackedHooksSelftestTest):
+    """A committed hook that runs `bench_check.py gate` itself (the shared template's perf stanza) is a valid wiring: the chain
+    line would read stdin first and break it."""
+
+    def commit_hook(self, text):
+        (self.tracked / "pre-push").write_text(text, encoding="utf-8", newline="\n")
+        self.install_quietly()
+
+    def record_tooling(self, *parts):
+        record = self.repo.joinpath(*parts, "sub0math_tooling_dir.txt")
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(common.tooling_script().parent.as_posix(), encoding="utf-8")
+
+    def test_the_template_stanza_passes_with_a_build_directory_record(self):
+        self.record_tooling("build")
+        self.commit_hook(TEMPLATE_STANZA)
+        rows = [r for r in st.run_selftest(self.repo) if r[1].startswith("hook pre-push")]
+        self.assertEqual([r[0] for r in rows], [st.PASS], rows)
+        self.assertIn("runs `bench_check.py gate` itself", rows[0][2])
+
+    def test_a_preset_build_directory_record_is_found(self):
+        self.record_tooling("build", "linux-release")
+        self.commit_hook(TEMPLATE_STANZA)
+        self.assertEqual(self.rows()["hook pre-push"][0], st.PASS)
+
+    def test_the_environment_override_names_the_tooling(self):
+        self.commit_hook(TEMPLATE_STANZA)
+        self.assertEqual(self.rows()["hook pre-push"][0], st.WARN)  # nothing recorded yet
+        os.environ[hk.TOOLING_ENV] = str(common.tooling_script().parent)
+        self.addCleanup(os.environ.pop, hk.TOOLING_ENV, None)
+        self.assertEqual(self.rows()["hook pre-push"][0], st.PASS)
+
+    def test_no_tooling_record_is_a_warning_not_a_failure(self):
+        self.commit_hook(TEMPLATE_STANZA)
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.WARN)
+        self.assertIn("skips the gate until the build is configured", detail)
+
+    def test_no_failure_row_and_exit_code_is_zero_for_the_template_wiring(self):
+        self.record_tooling("build")
+        self.commit_hook(TEMPLATE_STANZA)
+        self.assertNotIn(st.FAIL, [r[0] for r in st.run_selftest(self.repo) if r[1].startswith("hook pre-push")])
+
+    def test_a_stanza_without_refs_from_stdin_warns(self):
+        self.record_tooling("build")
+        self.commit_hook(TEMPLATE_STANZA.replace(" --refs-from-stdin", ""))
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.WARN)
+        self.assertIn("--refs-from-stdin", detail)
+
+    def test_a_literal_missing_script_fails(self):
+        self.commit_hook("#!/bin/sh\npython /nowhere/bench_check.py gate --refs-from-stdin\n")
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.FAIL)
+        self.assertIn("does not exist", detail)
+
+    def test_a_commented_out_stanza_is_still_not_wired(self):
+        self.commit_hook("#!/bin/sh\n# python \"$tooling/bench_check.py\" gate --refs-from-stdin\nexit 0\n")
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.FAIL)
+        self.assertIn("does not run sub0perf", detail)
+        self.assertIn("pre-push template", detail)  # the message names both wirings
+
+    def test_install_prints_no_chain_line_for_a_hook_that_runs_the_gate_itself(self):
+        import contextlib
+        import io
+        (self.tracked / "pre-push").write_text(TEMPLATE_STANZA, encoding="utf-8", newline="\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.install()
+        self.assertNotIn("pre-push; left", out.getvalue().replace("left post-checkout", ""))
+        self.assertNotIn(hk.chain_line("pre-push"), out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
