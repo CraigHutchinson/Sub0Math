@@ -34,9 +34,7 @@ ZERO = "0" * 40
 
 def hooks_dir(repo):
     """Where git looks for hooks in this repository (honours core.hooksPath), as an absolute path."""
-    found = git(repo, "rev-parse", "--git-path", "hooks")
-    path = Path(found or ".git/hooks")
-    return path if path.is_absolute() else Path(repo) / path
+    return hooks.hooks_dir(repo)
 
 
 def _path_lines(text):
@@ -55,12 +53,35 @@ def _assigned(text, name):
 
 
 def check_hook(repo, name, required):
-    """Rows for one installed hook."""
+    """Rows for one installed hook.
+
+    A hook directory inside the worktree (core.hooksPath, for example `.githooks`: tracked, so never written by install-hooks)
+    or SUB0MATH_PERF_HOOK_MODE=chain keeps ours in .git/sub0perf/hooks, run by one line of the committed hook: that line must be
+    there, and the copy must be what install-hooks writes.
+    """
     d = hooks_dir(repo)
     path = d / name
     label = f"hook {name}"
-    if not path.is_file():
+    line = hooks.chain_line(name)
+    tracked = hooks.is_tracked_dir(repo)
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+    if text is not None and hooks.HOOK_MARK not in text and hooks.chained_in(text, name):
+        copy = hooks.chain_path(repo, name)
+        if not copy.is_file():
+            return [(FAIL, label, f"{path} chains to {copy}, which does not exist; run install-hooks (or configure the build)")]
+        return _inspect(copy, name, f"{label} (chained from {path.name})", True)
+    if tracked or os.environ.get(hooks.MODE_VAR, "").strip().lower() == "chain":
+        where = "tracked hooks directory" if tracked else f"{hooks.MODE_VAR}=chain"
+        if text is None:
+            return [(FAIL if required else WARN, label, f"{where}: {path} does not exist, so git runs no {name}; add it with this line: {line}")]
+        return [(FAIL if required else WARN, label, f"{where}: {path} does not run sub0perf; add this line to it: {line}")]
+    if text is None:
         return [(FAIL if required else WARN, label, f"not installed in {d} (git looks there; configure the build or run install-hooks)")]
+    return _inspect(path, name, label, required)
+
+
+def _inspect(path, name, label, required):
+    """Rows for the hook text at `path`: it is ours, executable, calls an existing bench_check.py and python, and has not drifted."""
     text = path.read_text(encoding="utf-8", errors="replace")
     if hooks.HOOK_MARK not in text:
         return [(FAIL, label, f"{path} is not a sub0perf hook, so the gate does not run")]

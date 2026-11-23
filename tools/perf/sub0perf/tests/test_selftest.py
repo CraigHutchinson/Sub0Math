@@ -225,5 +225,51 @@ class CommandTest(SelftestCase):
         self.assertIn("failed", out.getvalue())
 
 
+class TrackedHooksSelftestTest(SelftestCase):
+    """A hooks directory inside the worktree (core.hooksPath): the committed hook must carry the one chaining line."""
+
+    def setUp(self):
+        super().setUp()
+        gitstate.git(self.repo, "config", "core.hooksPath", ".githooks")
+        self.tracked = self.repo / ".githooks"
+        self.tracked.mkdir()
+        self.costs()
+
+    def install_quietly(self, **kw):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.install(**kw)
+
+    def test_no_committed_hook_fails_and_prints_the_line_to_add(self):
+        self.install_quietly()
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.FAIL)
+        self.assertIn(hk.chain_line("pre-push"), detail)
+
+    def test_a_committed_hook_without_the_line_fails(self):
+        (self.tracked / "pre-push").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+        self.install_quietly()
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.FAIL)
+        self.assertIn("does not run sub0perf", detail)
+
+    def test_a_committed_hook_with_the_line_passes_and_the_copy_is_checked(self):
+        (self.tracked / "pre-push").write_text("#!/bin/sh\n" + hk.chain_line("pre-push") + "\n", encoding="utf-8", newline="\n")
+        self.install_quietly()
+        label = "hook pre-push (chained from pre-push)"
+        self.assertEqual(self.rows()[label][0], st.PASS)
+        hk.chain_path(self.repo, "pre-push").write_text("#!/bin/sh\n" + hk.HOOK_MARK + "\necho drifted\n", encoding="utf-8", newline="\n")
+        self.assertEqual(self.rows()[label][0], st.FAIL)
+
+    def test_the_line_with_no_chained_copy_fails(self):
+        (self.tracked / "pre-push").write_text("#!/bin/sh\n" + hk.chain_line("pre-push") + "\n", encoding="utf-8", newline="\n")
+        self.install_quietly()
+        hk.chain_path(self.repo, "pre-push").unlink()
+        status, detail = self.rows()["hook pre-push"]
+        self.assertEqual(status, st.FAIL)
+        self.assertIn("does not exist", detail)
+
+
 if __name__ == "__main__":
     unittest.main()
