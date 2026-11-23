@@ -24,7 +24,8 @@
 #       SMOKE_TEST: registers ctest test <target>_smoke (`<target> --smoke`: every workload once, exit status only).
 #       METRICS <spec>: <spec> (relative to the project root, e.g. perf/metrics.json) holds the deterministic metrics the
 #       executable reports with BenchRunner::metric(); registers ctest test <target>_metrics (`bench_check.py metrics`)
-#       and the target <target>_metrics_accept (moves the spec to the measured values; reason in SUB0MATH_PERF_REASON).
+#       and the target <target>_metrics_accept (moves the failing and new metrics to the measured values, never an xfail one, editing
+#       the spec in place; SUB0MATH_ACCEPT_METRIC="name;name" accepts just those and clears their xfail; reason in SUB0MATH_PERF_REASON).
 #       Both tests carry the ctest label "smoke" and never time anything, so they are safe in `ctest` and CI.
 #         <target>_vtune_hotspots   VTune hotspots      (SUB0MATH_PROFILE_FILTER, _SECONDS)
 #         <target>_vtune_uarch      VTune microarchitecture exploration
@@ -231,9 +232,17 @@ function(sub0math_add_benchmark target)
                  COMMAND ${Python3_EXECUTABLE} "${check}" metrics --exe $<TARGET_FILE:${target}> --spec "${metrics_spec}"
                          --out "${metrics_out}")
         set_tests_properties(${target}_metrics PROPERTIES LABELS "smoke")
+        # Without SUB0MATH_ACCEPT_METRIC the failing and new metrics are accepted (--all-changed), never an xfail one; naming a
+        # metric (a ;-list) accepts exactly those, and clears the xfail marker of a named metric. The spec is edited in place.
+        set(SUB0MATH_ACCEPT_METRIC "" CACHE STRING "<target>_metrics_accept: accept only these metrics (;-list); an xfail is cleared only for a named one")
+        if(SUB0MATH_ACCEPT_METRIC)
+            set(accept_which --metric ${SUB0MATH_ACCEPT_METRIC})
+        else()
+            set(accept_which --all-changed)
+        endif()
         add_custom_target(${target}_metrics_accept
             COMMAND ${Python3_EXECUTABLE} "${check}" accept --exe $<TARGET_FILE:${target}> --spec "${metrics_spec}"
-                    --out "${metrics_out}" --all-changed
+                    --out "${metrics_out}" ${accept_which}
             DEPENDS ${target} USES_TERMINAL VERBATIM)
     endif()
 

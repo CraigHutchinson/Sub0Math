@@ -489,6 +489,9 @@ any git hook; the baseline log is the record that should explain why.
 
 Baselines live in `perf/baselines/<host>.json`: median, spread and rounds per benchmark, calibration
 time, and pair ratios. Timings from one machine say nothing about another, so each host has its own.
+`<host>` is `SUB0MATH_PERF_HOST` (a CMake cache variable, default the lower-cased host name), and the `"host"` field of the
+baseline and of the records carries that name, not the machine's own; the build targets pass it to the tooling as the
+environment variable of the same name, which a shell can set too.
 Baselines in the older format (a number per benchmark) are still read, judged against the suite's
 median drift, and should be re-recorded. Sub0Math's CI does not time anything: it builds with
 `-DSUB0MATH_BUILD_BENCHMARKS=OFF` (and `SUB0MATH_PERF_ON_BUILD=OFF`, `SUB0MATH_PERF_GIT_HOOKS=OFF`), because shared
@@ -538,16 +541,21 @@ reason for a metric that is expected to fail: while it fails (XFAIL) it does not
 metric the spec lacks is NEW (listed, does not block). Exit 1 on FAIL, XPASS or MISSING; exit 2 on unreadable input.
 
 Moving a metric is explicit and logged, like a baseline: `accept --metric NAME... --reason "why"` (with
-`--spec`, and `--results` or `--exe`) sets the metric's `expected` (or `limit`) to the measured value, clears an `xfail`,
-and appends date, commit, reason, before and after to the spec's `accepted` list. `--all-changed` takes every failing,
-xfail and new metric. Commit the spec with the change.
+`--spec`, and `--results` or `--exe`) sets the metric's `expected` (or `limit`) to the measured value, clears the `xfail` of a metric that is named,
+and appends date, commit, reason, before and after to the spec's `accepted` list. `--all-changed` takes the failing and the
+new metrics and **never an xfail one** (it would move the value and leave the marker; the skipped names are printed): an
+`xfail` is cleared only by naming its metric. The spec is edited in place with the smallest change: its layout, indentation
+and key order stay, only the accepted value, a removed `xfail`, a new metric and the appended log entry differ, so the diff
+to review is the change. (If a layout cannot be followed the file is rewritten in full, and that is said.) Commit the spec
+with the change.
 
 ```cmake
 sub0math_add_benchmark(MyLibrary_Bench bench_my_library.cpp METRICS perf/metrics.json SMOKE_TEST)
 ```
 
 `SMOKE_TEST` registers ctest test `<target>_smoke`; `METRICS <spec>` (relative to the project root) registers
-`<target>_metrics` and the target `<target>_metrics_accept` (reason in `SUB0MATH_PERF_REASON`). Both tests carry the
+`<target>_metrics` and the target `<target>_metrics_accept` (reason in `SUB0MATH_PERF_REASON`; failing and new metrics, never an
+xfail one, unless `-DSUB0MATH_ACCEPT_METRIC="name;name"` names the metrics, which also clears their `xfail`). Both tests carry the
 label `smoke` and never time, so `ctest` and CI may run them: a layout or iteration-count regression is then a red test,
 and a benchmark that crashes is caught without a timing machine. Sub0Math dogfoods it with the sizes of its core types.
 

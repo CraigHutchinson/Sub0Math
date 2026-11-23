@@ -148,6 +148,90 @@ class MetricsTest(unittest.TestCase):
         self.assertIn("steps", text)
         self.assertEqual(self.spec.read_text(encoding="utf-8"), before)
 
+    HAND_WRITTEN = """{
+  "schema": "sub0perf-metrics-spec-1",
+  "metrics": {
+    "size": {"expected": 24, "kind": "exact", "unit": "B"},
+    "steps": {"kind": "max", "limit": 40, "xfail": "known"},
+    "alloc": {
+        "kind": "exact",
+        "expected": 2,
+        "xfail": "two today"
+    },
+    "ok": {"kind": "exact", "expected": 5}
+  },
+  "accepted": []
+}
+"""
+
+    def write_hand_written(self):
+        self.spec.write_text(self.HAND_WRITTEN, encoding="utf-8", newline="\n")
+
+    def write_all_results(self, **values):
+        items = [{"name": n, "value": v, "unit": "", "kind": "max" if n == "steps" else "exact"} for n, v in values.items()]
+        self.results.write_text(json.dumps({"metrics": items}), encoding="utf-8")
+
+    def test_all_changed_never_clears_an_xfail_and_says_so(self):
+        self.write_hand_written()
+        self.write_all_results(size=32, steps=99, alloc=3, ok=5)  # size FAILs; steps and alloc are XFAIL
+        code, text = self.accept(all_changed=True)
+        data = json.loads(self.spec.read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertEqual(data["metrics"]["size"]["expected"], 32)
+        self.assertEqual(data["metrics"]["steps"], {"kind": "max", "limit": 40, "xfail": "known"})
+        self.assertEqual(data["metrics"]["alloc"]["expected"], 2)
+        self.assertEqual(sorted(data["accepted"][-1]["metrics"]), ["size"])
+        self.assertIn("steps", text)
+        self.assertIn("alloc", text)
+
+    def test_all_changed_with_only_xfail_failing_is_nothing_to_accept(self):
+        self.write_hand_written()
+        self.write_all_results(size=24, steps=99, alloc=3, ok=5)
+        before = self.spec.read_text(encoding="utf-8")
+        code, text = self.accept(all_changed=True)
+        self.assertEqual(code, 2)
+        self.assertIn("by name", text)
+        self.assertEqual(self.spec.read_text(encoding="utf-8"), before)
+
+    def test_naming_an_xfail_metric_clears_just_that_marker(self):
+        self.write_hand_written()
+        self.write_all_results(size=24, steps=99, alloc=3, ok=5)
+        self.accept(["alloc"])
+        data = json.loads(self.spec.read_text(encoding="utf-8"))
+        self.assertEqual(data["metrics"]["alloc"], {"kind": "exact", "expected": 3})
+        self.assertEqual(data["metrics"]["steps"]["xfail"], "known")
+        self.assertEqual(data["accepted"][-1]["metrics"]["alloc"]["xfail_cleared"], "two today")
+
+    def test_accept_keeps_the_layout_and_key_order_of_the_spec(self):
+        self.write_hand_written()
+        self.write_all_results(size=32, steps=99, alloc=3, ok=5, extra=7)
+        self.accept(["size", "alloc"], all_changed=True)
+        text = self.spec.read_text(encoding="utf-8")
+        expected_start = self.HAND_WRITTEN[:self.HAND_WRITTEN.index('    "alloc"')].replace('"expected": 24', '"expected": 32')
+        self.assertTrue(text.startswith(expected_start), text)  # key order and layout of the untouched part
+        self.assertIn('    "steps": {"kind": "max", "limit": 40, "xfail": "known"},\n', text)
+        self.assertIn('        "kind": "exact",\n        "expected": 3\n    },\n    "ok": {"kind": "exact", "expected": 5},\n'
+                      '    "extra": {"kind": "exact", "expected": 7}\n  },\n', text)
+        data = json.loads(text)
+        self.assertEqual(list(data["metrics"]["size"]), ["expected", "kind", "unit"])
+        self.assertEqual(sorted(data["accepted"][-1]["metrics"]), ["alloc", "extra", "size"])
+
+    def test_a_missing_spec_is_created_whole(self):
+        self.spec.unlink()
+        self.write_results(size=32)
+        self.assertEqual(self.accept(["size"])[0], 0)
+        data = json.loads(self.spec.read_text(encoding="utf-8"))
+        self.assertEqual(data["metrics"]["size"], {"kind": "exact", "expected": 32})
+        self.assertEqual(data["schema"], metrics.SPEC_SCHEMA)
+
+    def test_a_spec_without_an_accepted_list_gets_one_added_in_place(self):
+        self.spec.write_text('{\n  "metrics": {\n    "size": {"kind": "exact", "expected": 24}\n  }\n}\n', encoding="utf-8", newline="\n")
+        self.write_results(size=32)
+        self.accept(["size"])
+        text = self.spec.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith('{\n  "metrics": {\n    "size": {"kind": "exact", "expected": 32}\n  },\n  "accepted": ['), text)
+        self.assertEqual(json.loads(text)["accepted"][0]["metrics"]["size"]["to"], 32)
+
     def test_accept_with_nothing_named_is_an_error(self):
         self.write_results(size=32)
         self.assertEqual(self.accept([])[0], 2)

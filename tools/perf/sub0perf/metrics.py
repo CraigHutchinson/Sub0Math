@@ -20,8 +20,10 @@ does not block). `metrics` exits 1 on FAIL, XPASS or MISSING, 2 on unreadable in
 machine, so there is no noise, no calibration and no power policy.
 
 `accept --metric NAME... --reason TEXT (--results <metrics.json> | --exe BENCH) --spec <spec>` moves the named metrics' expected value
-(or limit) to the measured one, clears an xfail, and logs date, commit, reason, before and after in the spec's `accepted`
-list, like accept.py does for a baseline. Commit the spec with the change.
+(or limit) to the measured one, clears the xfail of a metric that is named, and logs date, commit, reason, before and after in the
+spec's `accepted` list, like accept.py does for a baseline. `--all-changed` takes the failing and the new metrics, never an xfail
+one (an xfail marker is cleared only by naming the metric). The spec is edited in place with the smallest change: its layout and
+key order stay (jsonpatch.py). Commit the spec with the change.
 """
 
 import json
@@ -29,7 +31,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import output
+from . import jsonpatch, output
 from .common import atomic_write_text, read_json
 from .gitstate import git_head
 
@@ -189,22 +191,42 @@ def metrics_command(args):
     return code
 
 
+def _named(args, results, spec):
+    """(names to accept, skipped xfail names). `--metric` names are taken as given; `--all-changed` adds the failing and new
+    metrics, never an xfail one: accepting it would move its value but keep the marker, and clearing the marker is a decision
+    for the person who names the metric."""
+    names = list(dict.fromkeys(args.metric or []))
+    skipped = []
+    if args.all_changed:
+        for n, status, _ in judge(results, spec):
+            if status in ("FAIL", "NEW") and n not in names:
+                names.append(n)
+            elif status in ("XFAIL", "XPASS") and n not in names:
+                skipped.append(n)
+    return names, skipped
+
+
 def accept_metrics_command(args):
-    """Moves metrics of the spec to their measured values with a logged reason (see the module docstring)."""
+    """Moves metrics of the spec to their measured values with a logged reason (see the module docstring).
+
+    The spec file is edited in place with the smallest change (jsonpatch.py): its layout and key order are kept.
+    """
     try:
         args.results = results_file(args)
         results, spec = load_results(args.results), load_spec(args.spec)
     except (OSError, ValueError) as error:
         print(f"bench_check: {error}")
         return 2
-    names = [n for n, s, _ in judge(results, spec) if s in ("FAIL", "XFAIL", "XPASS", "NEW")] if args.all_changed else args.metric
+    names, skipped = _named(args, results, spec)
     if not names:
-        print("bench_check: nothing to accept")
+        print("bench_check: nothing to accept" + (f" (xfail metrics are only accepted by name: {', '.join(skipped)})" if skipped else ""))
         return 2
     absent = [n for n in names if n not in results]
     if absent:
         print(f"bench_check: {args.results} has no value for: {', '.join(absent)}; measure them first (`<bench> --metrics-only --json FILE`)")
         return 2
+    original = Path(args.spec).read_text(encoding="utf-8") if Path(args.spec).is_file() else None
+    doc = jsonpatch.Doc(original) if original is not None else None
     changes = {}
     for name in names:
         measured = results[name]
@@ -213,16 +235,60 @@ def accept_metrics_command(args):
         key = "limit" if kind == "max" else "expected"
         entry = {k: v for k, v in (old or {}).items() if k not in ("xfail", "expected", "limit")}
         entry.update({"kind": kind, key: measured["value"]})
-        if measured["unit"] and "unit" not in entry:
+        unit_added = bool(measured["unit"]) and "unit" not in entry
+        if unit_added:
             entry["unit"] = measured["unit"]
         changes[name] = {"from": None if old is None else old.get(key), "to": measured["value"], "kind": kind,
                          **({"xfail_cleared": old["xfail"]} if old and "xfail" in old else {})}
         spec["metrics"][name] = entry
-    spec.setdefault("schema", SPEC_SCHEMA)
-    spec.setdefault("accepted", []).append({"date": time.strftime("%Y-%m-%d"), "commit": git_head(Path(args.spec).resolve().parent) or "",
-                                            "reason": args.reason, "metrics": changes})
-    atomic_write_text(args.spec, json.dumps(spec, indent=2) + "\n")
+        if doc is not None:
+            _patch_metric(doc, name, old, entry, key, unit_added, measured)
+    log = {"date": time.strftime("%Y-%m-%d"), "commit": git_head(Path(args.spec).resolve().parent) or "",
+           "reason": args.reason, "metrics": changes}
+    had_accepted = isinstance(spec.get("accepted"), list)
+    spec.setdefault("accepted", []).append(log)
+    text = _patched_text(doc, spec, log, had_accepted)
+    if text is None:  # no spec yet, or a layout the patcher could not follow: write the whole file
+        spec.setdefault("schema", SPEC_SCHEMA)
+        text = json.dumps(spec, indent=2) + "\n"
+        if doc is not None:
+            print(f"bench_check: note: {args.spec} was rewritten in full (its layout could not be edited in place)")
+    atomic_write_text(args.spec, text)
     for name, c in changes.items():
-        print(f"accepted {name}: {c['from']} -> {c['to']}")
+        print(f"accepted {name}: {c['from']} -> {c['to']}" + (" (xfail cleared)" if "xfail_cleared" in c else ""))
+    if skipped:
+        print(f"not accepted (xfail; name one to accept it and clear its marker): {', '.join(skipped)}")
     print(f"logged in {args.spec}; commit it with the change, and say why")
     return 0
+
+
+def _patch_metric(doc, name, old, entry, key, unit_added, measured):
+    """Edits metric `name` in the spec text: the value changes, an xfail goes, a missing unit is added; a new metric is appended."""
+    path = ["metrics", name]
+    if old is None:
+        doc.add(["metrics"], name, entry)
+        return
+    if key in old:
+        doc.replace(path + [key], measured["value"])
+    else:
+        doc.add(path, key, measured["value"])
+    if "xfail" in old:
+        doc.remove(path + ["xfail"])
+    if unit_added:
+        doc.add(path, "unit", measured["unit"])
+
+
+def _patched_text(doc, spec, log, had_accepted):
+    """The edited spec text, or None when there is none or it does not parse to the intended spec."""
+    if doc is None:
+        return None
+    try:
+        if had_accepted:
+            doc.append(["accepted"], log)
+        else:
+            doc.add([], "accepted", [log])
+        if json.loads(doc.text) == spec:
+            return doc.text
+    except (jsonpatch.PatchError, IndexError, ValueError, KeyError):
+        pass
+    return None
