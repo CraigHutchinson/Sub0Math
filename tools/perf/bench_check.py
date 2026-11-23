@@ -7,8 +7,15 @@ noise, and paired comparisons with hand-written references.
   bench_check.py baseline --results samples.json --baseline perf/baselines/<host>.json
   bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
   bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
+  bench_check.py compare  --exe NEW (--against OLD | --kept [SHA]) [--filter TEXT] [--rounds 10]       (interleaved A/B of two builds, >= 10 rounds)
+  bench_check.py metrics  --spec perf/metrics.json (--results metrics.json | --exe BENCH)                (exact/max/xfail; no timing)
+  bench_check.py accept   --spec perf/metrics.json (--results F | --exe BENCH) --metric NAME ... --reason TEXT   (logged, like a baseline)
   bench_check.py gate     [--repo DIR] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
   bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH
+
+Output contract. `check`, `auto`, `gate`, `compare` and `metrics` take `--format brief|json|md` (default md, or SUB0PERF_OUTPUT) and
+`--report PATH`. brief is one verdict line plus one line per row changed beyond noise; json is one `sub0perf-outcome-1` object; the
+full tables go to the report file. See docs/PERFORMANCE.md, "Output contract".
 
 How a run is made robust (`run`, and `auto` which runs then checks):
 

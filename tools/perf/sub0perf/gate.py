@@ -321,6 +321,7 @@ def run_gate(args, repo, d, config_path, head, clean):
         record["inconclusive_retried"] = sorted(retried)
         save_record(repo, target, record, exe=exe)  # the record before push (with any extra rounds), and the build that made it
         print("\n### Against the committed baseline\n")
+        args.report_default = str(Path(t["build_dir"]) / "perf" / f"{target}.report.md")
         rows, pair_rows, regressed_base = report(record, args)
         regressed_ref = []
         if ref:

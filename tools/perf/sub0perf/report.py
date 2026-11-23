@@ -3,8 +3,8 @@
 import os
 from pathlib import Path
 
-from . import power
-from .judge import evaluate_with, verdict_hits
+from . import output, power
+from .judge import evaluate_with
 
 
 def _bimodal_label(modes, verdict):
@@ -90,15 +90,20 @@ def render(rows, pair_rows, env, baseline_path, tolerance, pair_tolerance):
 
 
 def report(record, args):
+    """Judges `record`, prints the outcome in the chosen format (output.py) and returns (rows, pair_rows, regressed count).
+
+    The full markdown is printed (md) or written to the report file (brief, json); GITHUB_STEP_SUMMARY always gets it.
+    """
     rows, pair_rows, env = evaluate_with(record, args.baseline, args)
     text = render(rows, pair_rows, env, args.baseline, args.tolerance, args.pair_tolerance)
-    print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
-            f.write(f"### {record.get('exe', 'Benchmarks')} against {Path(args.baseline).name}\n\n{text}\n\n")
-    regressed = len(verdict_hits(rows, pair_rows, env, ["REGRESSED"]))
-    improved = len(verdict_hits(rows, pair_rows, env, ["IMPROVED"]))
-    noisy = len(verdict_hits(rows, pair_rows, env, ["NOISY", "ENVIRONMENT"]))
-    print(f"\nperf: {regressed} regressed, {improved} improved, {noisy} inconclusive")
-    return rows, pair_rows, regressed
+            f.write("### " + str(record.get("exe", "Benchmarks")) + " against " + Path(args.baseline).name + "\n\n" + text + "\n\n")
+    fmt = output.resolve_format(args)
+    counts = output.counts_of(rows, pair_rows, env)
+    exit_code = 0 if args.report_only or not counts["regressed"] else 1
+    output.emit_text(fmt, getattr(args, "command", None) or "check", counts, output.changed_rows(rows, pair_rows, env, args), text,
+                     output.report_path(args, Path(args.baseline).stem if not getattr(args, "exe", None) else None), args, exit_code,
+                     results=getattr(args, "results", None) or getattr(args, "out", None))
+    return rows, pair_rows, counts["regressed"]

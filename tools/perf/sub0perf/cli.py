@@ -7,8 +7,15 @@ noise, and paired comparisons with hand-written references.
   bench_check.py baseline --results samples.json --baseline perf/baselines/<host>.json
   bench_check.py auto     --exe BENCH --baseline ... [--rounds 3] [--epochs 5] [--report-only] [--record]
   bench_check.py accept   --results samples.json --baseline ... --reason TEXT (--benchmark NAME ... | --all-changed)
+  bench_check.py compare  --exe NEW (--against OLD | --kept [SHA]) [--filter TEXT] [--rounds 10]       (interleaved A/B of two builds, >= 10 rounds)
+  bench_check.py metrics  --spec perf/metrics.json (--results metrics.json | --exe BENCH)                (exact/max/xfail; no timing)
+  bench_check.py accept   --spec perf/metrics.json (--results F | --exe BENCH) --metric NAME ... --reason TEXT   (logged, like a baseline)
   bench_check.py gate     [--repo DIR] [--level quick|full] [--budget SECONDS] [--confirm-rounds 4]                      (the pre-push hook; reads .git/sub0perf/config.json)
   bench_check.py install-hooks --repo DIR --build-dir DIR --target NAME --exe PATH --baseline PATH  [--pin file=F,var=V,repo=owner/name ...]
+
+Output contract. `check`, `auto`, `gate`, `compare` and `metrics` take `--format brief|json|md` (default md, or SUB0PERF_OUTPUT) and
+`--report PATH`. brief is one verdict line plus one line per row changed beyond noise; json is one `sub0perf-outcome-1` object; the
+full tables go to the report file. See docs/PERFORMANCE.md, "Output contract".
 
 How a run is made robust (`run`, and `auto` which runs then checks):
 
@@ -80,15 +87,17 @@ import os
 import sys
 from pathlib import Path
 
-from . import levels, platform_proc, plan as planning, power, speed
+from . import levels, output, platform_proc, plan as planning, power, speed
 from .accept import accept_command, baseline_command
 from .baseline import make_record, write_samples
 from .common import read_json
+from .compare import compare_command
 from .confirm import confirm_regressions, noisy_names
 from .gate import choose_benchmarks, gate_command, power_guard
 from .gitstate import git_head, perf_dir, save_record, tree_clean
 from .hooks import install_hooks_command, note_checkout_command
 from .judge import evaluate_with
+from .metrics import accept_metrics_command, metrics_command
 from .lock import LockTimeout, PerfLock
 from .report import report
 from .selftest import selftest_command
@@ -230,10 +239,10 @@ def main():
         from .workload import main as workload_main
         return workload_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "install-hooks", "note-checkout", "selftest", "power", "workload"])
+    parser.add_argument("command", choices=["run", "check", "baseline", "auto", "accept", "gate", "compare", "metrics", "install-hooks", "note-checkout", "selftest", "power", "workload"])
     parser.add_argument("--exe", help="benchmark executable (run, auto)")
     parser.add_argument("--out", help="samples file to write (run; optional for auto)")
-    parser.add_argument("--results", help="samples file from `run` (check, baseline)")
+    parser.add_argument("--results", help="samples file from `run` (check, baseline); metrics file (metrics, accept --metric)")
     parser.add_argument("--baseline", help="perf/baselines/<host>.json")
     parser.add_argument("--filter", default="", help="only benchmarks whose name contains this text")
     parser.add_argument("--rounds", type=int, default=5)
@@ -259,6 +268,16 @@ def main():
                         help="gate: read the pushed refs from stdin (pre-push hook); refuse a dirty tree or a HEAD that is not pushed")
     parser.add_argument("--max-load", type=float, default=0.20, help="busy fraction of all CPUs above which a round waits")
     parser.add_argument("--settle", type=float, default=30.0, help="seconds to wait for load to fall")
+    parser.add_argument("--format", choices=list(output.FORMATS), default=None,
+                        help="check, auto, gate, compare, metrics: brief (one verdict line plus a line per change beyond noise), json "
+                             "(schema sub0perf-outcome-1) or md (the full tables). Default: SUB0PERF_OUTPUT, else md")
+    parser.add_argument("--report", metavar="PATH", help="check, auto, gate, compare, metrics: write the full markdown report here "
+                        "(brief and json always write one; the default sits beside the samples file or executable)")
+    parser.add_argument("--against", metavar="EXE", help="compare: the build to compare --exe against")
+    parser.add_argument("--kept", nargs="?", const="latest", default=None, metavar="SHA",
+                        help="compare: compare against a kept build (.git/sub0perf/bins/<target>/): the newest that differs from --exe, or the one of SHA")
+    parser.add_argument("--spec", metavar="FILE", help="metrics, accept --metric: the metrics spec (perf/metrics.json)")
+    parser.add_argument("--metric", nargs="+", default=[], help="accept: metrics of the spec to move to the measured value (with --spec)")
     parser.add_argument("--tolerance", type=float, default=0.10)
     parser.add_argument("--pair-tolerance", type=float, default=0.05)
     parser.add_argument("--instr-tolerance", type=float, default=0.02, help="instructions per op change that counts")
@@ -284,10 +303,14 @@ def main():
     if not args.max_rounds:
         args.max_rounds = args.rounds * 2
     needs = {"run": ["exe", "out"], "check": ["results", "baseline"], "baseline": ["results", "baseline"], "auto": ["exe", "baseline"],
-             "accept": ["results", "baseline", "reason"], "gate": [], "install-hooks": ["repo", "build_dir", "target", "exe", "baseline"],
+             "accept": ["results", "baseline", "reason"], "gate": [], "compare": ["exe"], "metrics": ["spec"], "install-hooks": ["repo", "build_dir", "target", "exe", "baseline"],
              "note-checkout": [], "selftest": [], "power": []}
     if args.command == "accept" and not args.reason:
         args.reason = os.environ.get("SUB0MATH_PERF_REASON")
+    if args.command == "accept" and (args.metric or args.spec):
+        needs["accept"] = ["spec", "reason"]
+    if args.command in ("metrics", "accept") and (args.metric or args.command == "metrics") and not (args.results or args.exe):
+        parser.error(f"{args.command} needs --results or --exe")
     missing = [f"--{k.replace('_', '-')}" for k in needs[args.command] if not getattr(args, k)]
     if missing:
         parser.error(f"{args.command} needs {' '.join(missing)}")
@@ -298,7 +321,14 @@ def main():
     if args.command == "gate":
         args.rounds = args.rounds if args.rounds != 5 else 3
         # Same method as baselines and records (default epochs), so absolute times compare like for like.
+    args.format = output.resolve_format(args)
+    if args.command == "accept" and (args.metric or args.spec):
+        return accept_metrics_command(args)
     commands = {"run": run_command, "check": check_command, "baseline": baseline_command, "auto": auto_command,
-                "accept": accept_command, "gate": gate_command, "install-hooks": install_hooks_command,
+                "accept": accept_command, "gate": gate_command, "compare": compare_command, "metrics": metrics_command, "install-hooks": install_hooks_command,
                 "note-checkout": note_checkout_command, "selftest": selftest_command, "power": power_command}
+    if args.command in ("auto", "gate"):  # long runs: chatter goes to a log in brief and json (output.Quiet)
+        with output.Quiet(args.format, output.quiet_log_path(args)) as quiet:
+            quiet.exit_code = commands[args.command](args)
+            return quiet.exit_code
     return commands[args.command](args)
