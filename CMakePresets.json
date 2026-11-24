@@ -85,7 +85,7 @@
         },
         {
             "name": "vectorization",
-            "displayName": "Vectorization remarks (use tools/perf/vectorization_report.py)",
+            "displayName": "Vectorization remarks (vectorization_report.py from Sub0Perf)",
             "binaryDir": "${sourceDir}/build-vec",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",

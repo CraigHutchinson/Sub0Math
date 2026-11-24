@@ -38,6 +38,6 @@ jobs:
     uses: CraigHutchinson/.github/.github/workflows/cpp-smoke.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
     with:
       apt-packages: g++-14 ninja-build ccache
-      cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake
+      cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/Sub0MathTooling.cmake cmake/Sub0MathFp.cmake
       extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
     permissions: { contents: read, statuses: write, actions: read, pull-requests: read, checks: read }

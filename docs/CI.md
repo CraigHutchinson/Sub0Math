@@ -8,8 +8,8 @@ This repository follows the family CI strategy: [ci-strategy.md](https://github.
 | `ci-full.yml` | Full: GCC and Clang, FMA leg, MSVC, macOS, sanitizers, `ctest --preset full`, provenance and reference suites | Tags `v*` and `milestone/*`, manual dispatch, pull requests labelled `ci:full`, weekly if `main` changed |
 | `upstream-drift.yml` | Upstream drift report (cheap) | Weekly, manifest changes |
 
-Performance is **not** measured in CI: shared runners are too noisy. The local perf gate owns it, and it measures only on mains: on battery it defers (see "Power state" in
-[PERFORMANCE.md](PERFORMANCE.md)).
+Performance is **not** measured in CI: shared runners are too noisy. The local perf gate owns it, and it measures only on mains: on battery it defers (see "Power state" in Sub0Perf's
+[docs/PERFORMANCE.md](https://github.com/CraigHutchinson/Sub0Perf/blob/main/docs/PERFORMANCE.md)).
 
 Off switches: repository variable `CI_MODE` (`off`, `smoke`, or unset), `[skip ci]` in a commit message, and the
 `ci:skip` pull request label (then `local-ci/quick` or `local-ci/full` is required instead).

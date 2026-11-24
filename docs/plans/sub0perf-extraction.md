@@ -1,6 +1,6 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status: planned 2026-11-24, not started. Executor: a fresh session working from this file alone.
+Status: in progress (2026-11-24). Done: phase 0 (ADR drafted, Proposed), 1, 2 (Sub0Perf at 3c74bce, CI green), 3 (Sub0Math branch, push pending). Executor: a fresh session working from this file alone.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -44,14 +44,14 @@ New in Sub0Perf: `README.md`, `LICENSE.md` (MIT, copy Sub0Math's), `AGENTS.md` a
 
 Each phase ends green before the next starts. Run commands in Git Bash unless they're shown as PowerShell.
 
-### Phase 0: ADR **(owner)**
+### Phase 0: ADR **(owner)** [drafted locally, not pushed]
 
 Write `docs/decisions/0004-sub0perf.md` in the `.github` repository (local clone `D:\Craig\GitHub\CraigHutchinson.github`),
 in the format of 0002: Status *Proposed*, Owner, *Supersedes ADR 0001 decision 5*, Context (the Why above), Decision (D1-D9),
 Follow-ups (phase 7, issues 4 and 7 against Sub0Platform, issue 8, D7). Add the row to `docs/decisions/README.md`. The owner
 accepts it before phase 3 pushes anything.
 
-### Phase 1: create Sub0Perf with history
+### Phase 1: create Sub0Perf with history [done]
 
 1. **(owner)** Install `git-filter-repo` (`python -m pip install --user git-filter-repo`).
 2. Make a throwaway clone (never filter the working checkout):
@@ -61,7 +61,7 @@ accepts it before phase 3 pushes anything.
 5. One commit, "Sub0Perf: standalone layout", that fixes the paths in D3, splits PERFORMANCE.md (keep only the moving sections; replace
    Sub0Math-specific examples with generic wording where they no longer make sense), trims tools-tests.yml to tools/perf, and adds the new files.
 
-### Phase 2: Sub0Perf is green on its own
+### Phase 2: Sub0Perf is green on its own [done: Sub0Perf main 3c74bce]
 
 - `CMakeLists.txt`: `project(Sub0Perf VERSION 0.1.0 LANGUAGES CXX)`. It includes `cmake/Sub0Perf.cmake`. When top level, it builds
   `examples/bench_sample.cpp`: two trivial workloads, one a hand-written reference pair, using `BenchRunner` and `metric()`.
@@ -73,7 +73,7 @@ accepts it before phase 3 pushes anything.
 - **(owner)** Create the GitHub repository (`gh repo create CraigHutchinson/Sub0Perf --public --source . --push`) and confirm CI is green.
   Note the SHA: it is `<SUB0PERF_SHA>` below.
 
-### Phase 3: Sub0Math consumes Sub0Perf (one PR on a topic branch)
+### Phase 3: Sub0Math consumes Sub0Perf (one PR on a topic branch) [done locally; push and PR pending]
 
 1. Delete what moved (`tools/perf/`, the tooling sections of `docs/PERFORMANCE.md`, `docs/PERF_LOOP.md`, the tools/perf step of tools-tests.yml).
 2. Add `cmake/Sub0MathFp.cmake` with `sub0math_target_deterministic_fp` (D4), included from `CMakeLists.txt`.
