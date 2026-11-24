@@ -19,8 +19,13 @@ include(cmake/Sub0MathFp.cmake)
 # Benchmark, budget, profiler and vectorization tooling comes from Sub0Perf (docs/PERFORMANCE.md), only when Sub0Math is the
 # top-level project: a consumer of the maths never fetches it.
 if(NOT IS_SUBPROJECT)
-    set(SUB0MATH_TOOLING_QUIET ON)
-    include(cmake/Sub0MathTooling.cmake)
+    include(cmake/get_cpm.cmake)
+    # Pinned to the Sub0Perf merge of 2026-11-24 that dropped its transition copy of sub0math_target_deterministic_fp.
+    CPMAddPackage(NAME Sub0Perf
+        GIT_REPOSITORY https://github.com/CraigHutchinson/Sub0Perf.git
+        GIT_TAG 7df1eed3e825aeced03697ee9b178938ec78d170
+        DOWNLOAD_ONLY YES)
+    include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")
 endif()
 
 # ── Header-only library ───────────────────────────────────────────────────────

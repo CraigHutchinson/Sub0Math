@@ -6,4 +6,3 @@
 
 # Vendored test dependencies: never convert
 tests/vendor/doctest.h   binary
-tests/vendor/nanobench.h binary

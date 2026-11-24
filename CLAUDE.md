@@ -16,7 +16,7 @@ The pre-push hook is the performance gate that configuring installs into `.git/h
 ## Commit Rules
 
 - A commit that changes the public API in `include/sub0math/` says so in its message.
-- A change to `cmake/Sub0MathTooling.cmake` (the Sub0Perf shim) or its Sub0Perf pin says which consumers it affects.
+- A change to `cmake/Sub0MathFp.cmake` says which consumers it affects; so does a bump of the Sub0Perf pin in `CMakeLists.txt` (it touches Sub0Math's own gate only).
 - Tests pass locally before committing.
 
 ## Branch Strategy
