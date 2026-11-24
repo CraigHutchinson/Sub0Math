@@ -49,7 +49,7 @@ Parity tests and replay need the same bits from every build. The compiler can br
 `a * b + c` into one fused multiply-add (FMA), which rounds once instead of twice. Fusing is allowed by
 default in some places: GCC in gnu mode (`-std=gnu++23`, the CMake default unless `CXX_EXTENSIONS OFF`)
 uses `-ffp-contract=fast`, and any build with FMA hardware enabled (`-march=native`,
-`SUB0MATH_NATIVE_ARCH`, `-march=x86-64-v3`, `/arch:AVX2`) then fuses. The same source gives different
+`SUB0PERF_NATIVE_ARCH`, `-march=x86-64-v3`, `/arch:AVX2`) then fuses. The same source gives different
 results with and without it.
 
 ```cmake
@@ -61,7 +61,7 @@ The helper adds `-ffp-contract=off` (GCC, Clang) or `/fp:precise` (MSVC; clang-c
 `/clang:-ffp-contract=off`). Scope defaults to `PRIVATE`. Sub0Math applies it to its own tests and
 benchmarks; a library whose inline headers are compiled in consumers' targets exports it as `INTERFACE`.
 The cost is the speed FMA would give, so a deliberate performance experiment with
-`SUB0MATH_NATIVE_ARCH` can leave it off, but then compares nothing against goldens. CI has one leg that
+`SUB0PERF_NATIVE_ARCH` can leave it off, but then compares nothing against goldens. CI has one leg that
 builds the tests with `-march=x86-64-v3` (FMA available) and must still pass. WebAssembly (Emscripten, under Node) must pass the same digests: [CI.md](CI.md), "WebAssembly leg". Turning the helper on in a
 repository moves its timings: re-record the baselines deliberately, with the reason.
 
@@ -95,7 +95,7 @@ which fault. A consumer's station tests segfaulted under `-march=x86-64-v3` unti
 
 ```bash
 cmake --preset vectorization
-python "$(cat build-vec/sub0math_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Math_Bench   # from Sub0Perf
+python "$(cat build-vec/sub0perf_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Math_Bench   # from Sub0Perf
 ```
 
 The report rebuilds with GCC `-fopt-info-vec-*`, Clang `-Rpass*` or MSVC `/Qvec-report:2` and lists

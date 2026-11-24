@@ -11,7 +11,7 @@ include_guard(GLOBAL)
 
 # Floating-point determinism: no contraction of a * b + c into a fused multiply-add. GCC defaults to
 # -ffp-contract=fast in gnu modes and Clang/MSVC contract under some flags, so a build with FMA hardware
-# (-march=native, SUB0MATH_NATIVE_ARCH, -march=x86-64-v3) would otherwise round differently from one
+# (-march=native, SUB0PERF_NATIVE_ARCH, -march=x86-64-v3) would otherwise round differently from one
 # without. Scope is INTERFACE for header-only libraries so consumers' translation units inherit it.
 function(sub0math_target_deterministic_fp target)
     set(scope PRIVATE)

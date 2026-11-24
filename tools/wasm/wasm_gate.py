@@ -86,7 +86,7 @@ def configure_arguments(repo: Path, builddir: str, prefix: str) -> list:
     return [
         "cmake", "-S", str(repo), "-B", builddir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
         f"-D{prefix}_BUILD_BENCHMARKS=OFF", f"-D{prefix}_WARNINGS_AS_ERRORS=ON",
-        "-DSUB0MATH_PERF_ON_BUILD=OFF", "-DSUB0MATH_PERF_GIT_HOOKS=OFF",
+        "-DSUB0PERF_ON_BUILD=OFF", "-DSUB0PERF_GIT_HOOKS=OFF",
         f"-DCMAKE_CXX_FLAGS={COMPILE_FLAGS}", f"-DCMAKE_EXE_LINKER_FLAGS={LINK_FLAGS}",
     ]
 
