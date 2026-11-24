@@ -11,9 +11,9 @@ Use generic examples in source, tests, documentation, issues and pull requests; 
 - Every type stays zero-overhead: size and trivial-copy static assertions, and a paired benchmark
   against plain numbers for anything new.
 - Every "this must not compile" rule gets a concept check in the tests.
-- Performance claims come from `Sub0Math_Bench` with the host and compiler stated. This repository also
-  owns the family's performance tooling (`cmake/Sub0MathTooling.cmake`, `tools/perf/`): changes there
-  affect every consumer.
+- Performance claims come from `Sub0Math_Bench` with the host and compiler stated. The performance
+  tooling is Sub0Perf's (`CraigHutchinson/Sub0Perf`); Sub0Math uses it and keeps only the transition shim
+  `cmake/Sub0MathTooling.cmake`, which affects every consumer that still includes the tooling through it.
 
 ## C++ Skills
 

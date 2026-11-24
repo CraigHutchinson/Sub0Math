@@ -73,9 +73,11 @@ CPMAddPackage(NAME Sub0Math GITHUB_REPOSITORY CraigHutchinson/Sub0Math
 target_link_libraries(app PRIVATE Sub0Math::Sub0Math)
 ```
 
-Sub0Math also hosts the family's performance tooling (`cmake/Sub0MathTooling.cmake`, `tools/perf/`):
-benchmark budgets, VTune, Advisor, `perf` and vectorization reports, one command each. Any library
-that depends on Sub0Math can use it; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+Sub0Math's own benchmarks and performance gate use the family's performance tooling, which lives in
+[Sub0Perf](https://github.com/CraigHutchinson/Sub0Perf) (benchmark budgets, VTune, Advisor, `perf` and vectorization reports).
+Building Sub0Math as the top-level project fetches it; a library that only uses the maths never does.
+`cmake/Sub0MathTooling.cmake` is a transition shim for consumers that still include the tooling from Sub0Math. See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Licence
 

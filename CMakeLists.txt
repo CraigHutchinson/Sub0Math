@@ -13,8 +13,15 @@ option(SUB0MATH_BUILD_TESTING    "Build unit-tests" ON)
 option(SUB0MATH_BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(SUB0MATH_WARNINGS_AS_ERRORS "Treat warnings in tests and benchmarks as errors" OFF)
 
-# Benchmark, budget, profiler and vectorization tooling for the whole Sub0 family (docs/PERFORMANCE.md).
-include(cmake/Sub0MathTooling.cmake)
+# Sub0Math's determinism contract (sub0math_target_deterministic_fp): consumers that add Sub0Math call it.
+include(cmake/Sub0MathFp.cmake)
+
+# Benchmark, budget, profiler and vectorization tooling comes from Sub0Perf (docs/PERFORMANCE.md), only when Sub0Math is the
+# top-level project: a consumer of the maths never fetches it.
+if(NOT IS_SUBPROJECT)
+    set(SUB0MATH_TOOLING_QUIET ON)
+    include(cmake/Sub0MathTooling.cmake)
+endif()
 
 # ── Header-only library ───────────────────────────────────────────────────────
 

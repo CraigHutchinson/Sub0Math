@@ -2,7 +2,7 @@
   "version": 1,
   "description": "Sub0Math local checks (docs/ci-strategy.md); run: python <.github repo>/tools/ci/local_ci.py --level quick|full",
   "selftest": [
-    "{python} tools/perf/bench_check.py selftest --repo ."
+    "{python} -c \"import pathlib, subprocess, sys; d = pathlib.Path('build/sub0math_tooling_dir.txt').read_text().strip(); sys.exit(subprocess.call([sys.executable, d + '/bench_check.py', 'selftest', '--repo', '.']))\""
   ],
   "levels": {
     "quick": {
@@ -29,7 +29,6 @@
         {
           "name": "python-tests",
           "commands": [
-            "{python} -m unittest discover -s tools/perf",
             "{python} -m unittest discover -s tools/provenance",
             "{python} -m unittest discover -s tools/wasm"
           ]
@@ -73,7 +72,6 @@
         {
           "name": "python-tests",
           "commands": [
-            "{python} -m unittest discover -s tools/perf",
             "{python} -m unittest discover -s tools/provenance",
             "{python} -m unittest discover -s tools/wasm"
           ]
