@@ -1,6 +1,6 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status: in progress (2026-11-24). Done: phase 0 (ADR drafted, Proposed), 1, 2 (Sub0Perf at 3c74bce, CI green), 3 (Sub0Math branch, push pending). Executor: a fresh session working from this file alone.
+Status: in progress, paused 2026-11-24 after phase 4's PR; see "Hand-over" at the end.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -44,7 +44,7 @@ New in Sub0Perf: `README.md`, `LICENSE.md` (MIT, copy Sub0Math's), `AGENTS.md` a
 
 Each phase ends green before the next starts. Run commands in Git Bash unless they're shown as PowerShell.
 
-### Phase 0: ADR **(owner)** [drafted locally, not pushed]
+### Phase 0: ADR **(owner)** [done: ADR 0004 Accepted, in .github PR 2]
 
 Write `docs/decisions/0004-sub0perf.md` in the `.github` repository (local clone `D:\Craig\GitHub\CraigHutchinson.github`),
 in the format of 0002: Status *Proposed*, Owner, *Supersedes ADR 0001 decision 5*, Context (the Why above), Decision (D1-D9),
@@ -73,7 +73,7 @@ accepts it before phase 3 pushes anything.
 - **(owner)** Create the GitHub repository (`gh repo create CraigHutchinson/Sub0Perf --public --source . --push`) and confirm CI is green.
   Note the SHA: it is `<SUB0PERF_SHA>` below.
 
-### Phase 3: Sub0Math consumes Sub0Perf (one PR on a topic branch) [done locally; push and PR pending]
+### Phase 3: Sub0Math consumes Sub0Perf (one PR on a topic branch) [done: merged as Sub0Math PR 9, 67ede5a]
 
 1. Delete what moved (`tools/perf/`, the tooling sections of `docs/PERFORMANCE.md`, `docs/PERF_LOOP.md`, the tools/perf step of tools-tests.yml).
 2. Add `cmake/Sub0MathFp.cmake` with `sub0math_target_deterministic_fp` (D4), included from `CMakeLists.txt`.
@@ -143,3 +143,36 @@ the same baseline (the baseline files and `.git/sub0perf/` are untouched). **(ow
 - Never commit to `main` directly; topic branch and PR per repository. Never push, create a repository or transfer an issue without the owner.
 - Don't change behaviour during the move (D2). If a test needs a behaviour change to pass, stop and report it.
 - Sub0Squad, Sub0Fabric and Sub0Canvas may have other sessions working in them: check `git status` and the current branch before editing, and use a worktree if they're busy.
+
+## Hand-over (paused 2026-11-24)
+
+Done
+- Phase 1-2: CraigHutchinson/Sub0Perf exists with history; main is `3c74bce22e848d3e4e13dfcb5eb9c480703b7db8` (PR 1 merged: Release presets,
+  chmod in `DirectGateWiringTest`). CI green (smoke, tools-tests, full tier by dispatch). `<SUB0PERF_SHA>` is that SHA.
+- Phase 3: Sub0Math PR 9 merged (`67ede5a`). The shim pins `3c74bce`. The full tier's macOS leg fails on the unsupported runner (issue 3);
+  the merge used `ci:local-verified` plus `local-ci/full`, with the owner's explicit yes.
+- Phase 4: `.github` PR 2 (branch `sub0perf-adr-0004`): ADR 0004 (Accepted), ci-strategy.md, templates/pre-push, `ci_power.py` finding
+  `sub0perf.power` through `sub0math_tooling_dir.txt`. Pushed, **not merged**; `tools/ci` tests pass (139).
+
+Left, in order
+1. Merge `.github` PR 2 (consumers' `local_ci.py`/`hook_check.py` come from this repository).
+2. Phase 5, one PR per repository, each checked for `git status`/branch first (other sessions): Sub0Squad (`cmake/dependencies.cmake`,
+   replace the Sub0Math CPM entry by `CPMAddPackage(NAME Sub0Perf ... GIT_TAG 3c74bce...)` with `DOWNLOAD_ONLY YES` and include
+   `${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake`; fix the comment), Sub0Fabric (`CMakeLists.txt` ~59-94; its comment citing "Sub0Math issue 5"
+   cites the transferred Sub0Perf issue), Sub0Canvas (~71-105), Sub0Physics (keep Sub0Math, bump its pin to `67ede5a`, add Sub0Perf, add a
+   Sub0Perf entry to `SUB0MATH_PERF_PINS`; `sub0math_target_deterministic_fp` now comes from Sub0Math's `Sub0MathFp.cmake`). Each must pass its
+   build, `ctest`, `bench_check.py selftest` and `hook_check.py`, with the baseline files and `.git/sub0perf/` untouched.
+   Learned: the consumer's `.ci/local.json` `"selftest"` has no `{sub0math_tooling}` placeholder (hook_check expands only `{python} {repo} {ci_dir}`);
+   Sub0Math reads `build/sub0math_tooling_dir.txt` in a `python -c` one-liner instead.
+3. Phase 6: transfer Sub0Math issues 4, 5, 6, 7 and 8 to Sub0Perf (`gh issue transfer`, **owner**), each with a comment linking ADR 0004;
+   comment on Sub0Platform issue 2 and the family responsibilities review; once every consumer has moved, remove the shim (own PR).
+4. Sub0Perf issue 2 (gate: a docs-only push of a *new* branch should skip measuring; the owner asked for it on 2026-11-24). Existing
+   behaviour: `documentation_only` skips docs-only ranges but treats a new branch (zero remote sha) as unknown and measures. A behaviour
+   change, so after the move (D2). Until then a docs-only first push of a branch needs `SUB0MATH_PERF_SKIP=<reason>` on a noisy machine.
+5. Phase 7 stays out of scope: rename, and issue 8's contract (above).
+
+Notes for the next session
+- The Sub0Perf selftest needs the pre-push hook and a baseline: Sub0Perf's configure installs the hook (off on CI) and
+  `perf/baselines/<host>.json` holds a sample baseline for the recording host (`croglegion`).
+- `D:\Craig\GitHub\Sub0Perf` is on `main` (clean); Sub0Math's `main` includes the merge. The `.github` clone is on branch `sub0perf-adr-0004`.
+- Open items for the ADR follow-ups: D7 (wasm_gate.py, tools/provenance), phase 7.
