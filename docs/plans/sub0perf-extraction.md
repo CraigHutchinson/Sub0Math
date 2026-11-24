@@ -116,6 +116,43 @@ the same baseline (the baseline files and `.git/sub0perf/` are untouched). **(ow
 - Comment on Sub0Platform issue 2 and Sub0LlmEngine's review (section 8 table) that sub0perf now lives in Sub0Perf.
 - Once every consumer has moved: remove the shim from Sub0Math (its own small PR).
 
+### Phase 6b: clean-up after the post-move review (2026-11-24)
+
+A review of the finished groundwork, done once all four consumers had moved, found these. Items 1-4 change no behaviour
+and go together as **one Sub0Math PR plus one Sub0Perf PR**. Item 5 is issue bookkeeping. Item 6 changes behaviour, so it
+goes in Sub0Perf after this plan (with issue 5).
+
+1. **Sub0Math fetches Sub0Perf directly; delete the shim.** Today `CMakeLists.txt` includes the deprecated
+   `cmake/Sub0MathTooling.cmake` with `SUB0MATH_TOOLING_QUIET`. No current consumer uses the shim any more: all four
+   fetch Sub0Perf themselves, and an older Sub0Math pin carries its own tooling file. Replace it with a direct
+   `CPMAddPackage(NAME Sub0Perf GIT_REPOSITORY ... GIT_TAG 3c74bce... DOWNLOAD_ONLY YES)` plus
+   `include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")`, still only when top level (D6). Keep `cmake/get_cpm.cmake`.
+   Delete `cmake/Sub0MathTooling.cmake` and the `SUB0MATH_TOOLING_QUIET` flag. Update the mentions in README, AGENTS.md,
+   CLAUDE.md and docs/CI.md (grep `Sub0MathTooling`, `shim`).
+2. **Delete Sub0Math `tests/vendor/nanobench.h`.** It is unused: `Sub0Math_Bench` gets nanobench from Sub0Perf's `vendor/`
+   (through `sub0math_add_benchmark`), and `tests/vendor` is left with `doctest.h` only. Check the bench still builds.
+3. **Delete the transition copy of `sub0math_target_deterministic_fp` in Sub0Perf `cmake/Sub0Perf.cmake`** (the
+   `if(NOT COMMAND ...)` block, about line 104, and its line in the header comment). No consumer needs it: Sub0Physics gets
+   it from Sub0Math's `Sub0MathFp.cmake`, and two definitions mean the first one included silently wins. This replaces D4's
+   "until phase 7". Point the header comment and Sub0Perf's docs at Sub0Math for the function. Then bump Sub0Math's pin from
+   item 1 to the new Sub0Perf SHA (no consumer pin needs bumping for this).
+4. **Plan status:** set the status line to "done (phases 0-6); phase 7 open", mark phases 4-6 done with their PRs, and
+   replace the stale hand-over section with a short "Outcome" listing what merged where and what is left (items 6 and 7 below, phase 7).
+5. **Issues:** make Sub0Perf issue 3 (machine-wide scheduling) the umbrella. Comment on it linking Sub0Perf issues 4, 7
+   and 8 and Sub0Platform issue 2, and comment on 7 and 8 pointing back to 3, so there is one lock design, not three. The
+   comment on the private family review (Sub0LlmEngine `docs/reviews/2026-11-24-family-responsibilities.md`, section 8) is still owed:
+   add a row saying sub0perf now lives in Sub0Perf and issues 4-8 moved there.
+6. **(after this plan, in Sub0Perf, with issue 5)** Sub0Fabric and Sub0Canvas each carry the same ~25-line CMake block:
+   reading the host from `SUB0MATH_PERF_HOST` (cache or environment), installing the gate only when
+   `perf/baselines/<host>.json` exists, and never from a linked worktree. That is gate policy, so move it into
+   `Sub0Perf.cmake` as a new default `SUB0MATH_PERF_GIT_HOOKS=AUTO` (off on CI, as now). Then each consumer keeps only the
+   `CPMAddPackage` and the `include`. This also fixes issue 5's worktree cases in Sub0Perf itself. File it as a comment on
+   Sub0Perf issue 5 now; build it as a separate change.
+
+Must pass: Sub0Math `cmake --preset default`, build, `ctest --preset default`, `Sub0Math_Bench` builds, `hook_check.py --repo .`,
+`local_ci.py --level quick`. Sub0Perf: python tests, build, `ctest`, selftest. Sub0Physics still configures against the new
+Sub0Math (`CPM_Sub0Math_SOURCE=D:/Craig/GitHub/Sub0Math`), with no pin change needed.
+
 ### Phase 7: later, separate changes (not part of this plan's execution)
 
 - Rename to `sub0perf_*` functions and `SUB0PERF_*` variables, reading the old names as fallbacks for one release. Same for `sub0perf_tooling_dir.txt`.
