@@ -1,6 +1,6 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status: in progress, paused 2026-11-24 after phase 4's PR; see "Hand-over" at the end.
+Status: done (phases 0-6, 6b); phase 7 open. See "Outcome" at the end of this file.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -90,7 +90,7 @@ accepts it before phase 3 pushes anything.
    Commit message: no public API change in `include/sub0math/`, and say which consumers the tooling move affects (all four, through the shim).
 8. **(owner)** Push and open the PR.
 
-### Phase 4: the `.github` repository (one PR)
+### Phase 4: the `.github` repository (one PR) [done]
 
 - `docs/ci-strategy.md`: "the performance gate (`Sub0Math` tooling)" and its other mentions become Sub0Perf; the reference implementations line gains Sub0Perf.
 - `templates/pre-push`: the comments name Sub0Perf (the mechanism, `sub0math_tooling_dir.txt`, is unchanged per D2).
@@ -98,7 +98,7 @@ accepts it before phase 3 pushes anything.
   and update the duplication note. `tools/ci/hook_check.py`: wording only, unless its lookup assumes Sub0Math.
 - ADR 0004 to *Accepted* once phases 2 and 3 are merged.
 
-### Phase 5: consumers, one PR each, in this order
+### Phase 5: consumers, one PR each, in this order [done]
 
 | Repo | Change |
 |---|---|
@@ -110,11 +110,48 @@ accepts it before phase 3 pushes anything.
 Each must pass its own build, `ctest`, `bench_check.py selftest` and `hook_check.py`. Its pre-push gate must still measure against
 the same baseline (the baseline files and `.git/sub0perf/` are untouched). **(owner)** for each push.
 
-### Phase 6: tidy up
+### Phase 6: tidy up [done]
 
 - **(owner)** Transfer Sub0Math issues 4, 5, 6, 7 and 8 to Sub0Perf, each with a comment linking the ADR.
 - Comment on Sub0Platform issue 2 and Sub0LlmEngine's review (section 8 table) that sub0perf now lives in Sub0Perf.
 - Once every consumer has moved: remove the shim from Sub0Math (its own small PR).
+
+### Phase 6b: clean-up after the post-move review (2026-11-24)
+
+A review of the finished groundwork, done once all four consumers had moved, found these. Items 1-4 change no behaviour
+and go together as **one Sub0Math PR plus one Sub0Perf PR**. Item 5 is issue bookkeeping. Item 6 changes behaviour, so it
+goes in Sub0Perf after this plan (with issue 5).
+
+1. **Sub0Math fetches Sub0Perf directly; delete the shim.** Today `CMakeLists.txt` includes the deprecated
+   `cmake/Sub0MathTooling.cmake` with `SUB0MATH_TOOLING_QUIET`. No current consumer uses the shim any more: all four
+   fetch Sub0Perf themselves, and an older Sub0Math pin carries its own tooling file. Replace it with a direct
+   `CPMAddPackage(NAME Sub0Perf GIT_REPOSITORY ... GIT_TAG 3c74bce... DOWNLOAD_ONLY YES)` plus
+   `include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")`, still only when top level (D6). Keep `cmake/get_cpm.cmake`.
+   Delete `cmake/Sub0MathTooling.cmake` and the `SUB0MATH_TOOLING_QUIET` flag. Update the mentions in README, AGENTS.md,
+   CLAUDE.md and docs/CI.md (grep `Sub0MathTooling`, `shim`).
+2. **Delete Sub0Math `tests/vendor/nanobench.h`.** It is unused: `Sub0Math_Bench` gets nanobench from Sub0Perf's `vendor/`
+   (through `sub0math_add_benchmark`), and `tests/vendor` is left with `doctest.h` only. Check the bench still builds.
+3. **Delete the transition copy of `sub0math_target_deterministic_fp` in Sub0Perf `cmake/Sub0Perf.cmake`** (the
+   `if(NOT COMMAND ...)` block, about line 104, and its line in the header comment). No consumer needs it: Sub0Physics gets
+   it from Sub0Math's `Sub0MathFp.cmake`, and two definitions mean the first one included silently wins. This replaces D4's
+   "until phase 7". Point the header comment and Sub0Perf's docs at Sub0Math for the function. Then bump Sub0Math's pin from
+   item 1 to the new Sub0Perf SHA (no consumer pin needs bumping for this).
+4. **Plan status:** set the status line to "done (phases 0-6); phase 7 open", mark phases 4-6 done with their PRs, and
+   replace the stale hand-over section with a short "Outcome" listing what merged where and what is left (items 6 and 7 below, phase 7).
+5. **Issues:** make Sub0Perf issue 3 (machine-wide scheduling) the umbrella. Comment on it linking Sub0Perf issues 4, 7
+   and 8 and Sub0Platform issue 2, and comment on 7 and 8 pointing back to 3, so there is one lock design, not three. The
+   comment on the private family review (Sub0LlmEngine `docs/reviews/2026-11-24-family-responsibilities.md`, section 8) is still owed:
+   add a row saying sub0perf now lives in Sub0Perf and issues 4-8 moved there.
+6. **(after this plan, in Sub0Perf, with issue 5)** Sub0Fabric and Sub0Canvas each carry the same ~25-line CMake block:
+   reading the host from `SUB0MATH_PERF_HOST` (cache or environment), installing the gate only when
+   `perf/baselines/<host>.json` exists, and never from a linked worktree. That is gate policy, so move it into
+   `Sub0Perf.cmake` as a new default `SUB0MATH_PERF_GIT_HOOKS=AUTO` (off on CI, as now). Then each consumer keeps only the
+   `CPMAddPackage` and the `include`. This also fixes issue 5's worktree cases in Sub0Perf itself. File it as a comment on
+   Sub0Perf issue 5 now; build it as a separate change.
+
+Must pass: Sub0Math `cmake --preset default`, build, `ctest --preset default`, `Sub0Math_Bench` builds, `hook_check.py --repo .`,
+`local_ci.py --level quick`. Sub0Perf: python tests, build, `ctest`, selftest. Sub0Physics still configures against the new
+Sub0Math (`CPM_Sub0Math_SOURCE=D:/Craig/GitHub/Sub0Math`), with no pin change needed.
 
 ### Phase 7: later, separate changes (not part of this plan's execution)
 
@@ -144,35 +181,13 @@ the same baseline (the baseline files and `.git/sub0perf/` are untouched). **(ow
 - Don't change behaviour during the move (D2). If a test needs a behaviour change to pass, stop and report it.
 - Sub0Squad, Sub0Fabric and Sub0Canvas may have other sessions working in them: check `git status` and the current branch before editing, and use a worktree if they're busy.
 
-## Hand-over (paused 2026-11-24)
+## Outcome (2026-11-24)
 
-Done
-- Phase 1-2: CraigHutchinson/Sub0Perf exists with history; main is `3c74bce22e848d3e4e13dfcb5eb9c480703b7db8` (PR 1 merged: Release presets,
-  chmod in `DirectGateWiringTest`). CI green (smoke, tools-tests, full tier by dispatch). `<SUB0PERF_SHA>` is that SHA.
-- Phase 3: Sub0Math PR 9 merged (`67ede5a`). The shim pins `3c74bce`. The full tier's macOS leg fails on the unsupported runner (issue 3);
-  the merge used `ci:local-verified` plus `local-ci/full`, with the owner's explicit yes.
-- Phase 4: `.github` PR 2 (branch `sub0perf-adr-0004`): ADR 0004 (Accepted), ci-strategy.md, templates/pre-push, `ci_power.py` finding
-  `sub0perf.power` through `sub0math_tooling_dir.txt`. Pushed, **not merged**; `tools/ci` tests pass (139).
+Merged: Sub0Perf (main, history kept; PRs 1 and 9), `.github` PR 2 (ADR 0004, Accepted), Sub0Math PRs 9, 10 and the phase 6b clean-up,
+Sub0Squad PR 9, Sub0Fabric PR 3, Sub0Canvas PR 6, Sub0Physics PR 3. Sub0Math fetches Sub0Perf directly (top level only); the shim and
+the unused `tests/vendor/nanobench.h` are gone; Sub0Perf no longer carries a copy of `sub0math_target_deterministic_fp`.
+Issues: Sub0Math 4-8 moved to Sub0Perf as 4-8; Sub0Perf 2 (docs-only push of a new branch) and 3 (machine-wide scheduling, the umbrella for
+4, 7 and 8); CI-adoption gaps in Sub0Physics 4, Sub0Fabric 4 and Sub0Canvas 7 (Canvas PR 6 merged with `ci/policy` red, by the owner's decision).
 
-Left, in order
-1. Merge `.github` PR 2 (consumers' `local_ci.py`/`hook_check.py` come from this repository).
-2. Phase 5, one PR per repository, each checked for `git status`/branch first (other sessions): Sub0Squad (`cmake/dependencies.cmake`,
-   replace the Sub0Math CPM entry by `CPMAddPackage(NAME Sub0Perf ... GIT_TAG 3c74bce...)` with `DOWNLOAD_ONLY YES` and include
-   `${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake`; fix the comment), Sub0Fabric (`CMakeLists.txt` ~59-94; its comment citing "Sub0Math issue 5"
-   cites the transferred Sub0Perf issue), Sub0Canvas (~71-105), Sub0Physics (keep Sub0Math, bump its pin to `67ede5a`, add Sub0Perf, add a
-   Sub0Perf entry to `SUB0MATH_PERF_PINS`; `sub0math_target_deterministic_fp` now comes from Sub0Math's `Sub0MathFp.cmake`). Each must pass its
-   build, `ctest`, `bench_check.py selftest` and `hook_check.py`, with the baseline files and `.git/sub0perf/` untouched.
-   Learned: the consumer's `.ci/local.json` `"selftest"` has no `{sub0math_tooling}` placeholder (hook_check expands only `{python} {repo} {ci_dir}`);
-   Sub0Math reads `build/sub0math_tooling_dir.txt` in a `python -c` one-liner instead.
-3. Phase 6: transfer Sub0Math issues 4, 5, 6, 7 and 8 to Sub0Perf (`gh issue transfer`, **owner**), each with a comment linking ADR 0004;
-   comment on Sub0Platform issue 2 and the family responsibilities review; once every consumer has moved, remove the shim (own PR).
-4. Sub0Perf issue 2 (gate: a docs-only push of a *new* branch should skip measuring; the owner asked for it on 2026-11-24). Existing
-   behaviour: `documentation_only` skips docs-only ranges but treats a new branch (zero remote sha) as unknown and measures. A behaviour
-   change, so after the move (D2). Until then a docs-only first push of a branch needs `SUB0MATH_PERF_SKIP=<reason>` on a noisy machine.
-5. Phase 7 stays out of scope: rename, and issue 8's contract (above).
-
-Notes for the next session
-- The Sub0Perf selftest needs the pre-push hook and a baseline: Sub0Perf's configure installs the hook (off on CI) and
-  `perf/baselines/<host>.json` holds a sample baseline for the recording host (`croglegion`).
-- `D:\Craig\GitHub\Sub0Perf` is on `main` (clean); Sub0Math's `main` includes the merge. The `.github` clone is on branch `sub0perf-adr-0004`.
-- Open items for the ADR follow-ups: D7 (wasm_gate.py, tools/provenance), phase 7.
+Left: item 6 above (move the per-consumer gate policy block into `Sub0Perf.cmake`, with Sub0Perf issue 5) and phase 7 (rename, parallel rows,
+Platform mechanism); the wasm gate and provenance tools stay in Sub0Math (D7).
