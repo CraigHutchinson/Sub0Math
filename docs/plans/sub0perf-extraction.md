@@ -1,6 +1,6 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status: done (phases 0-6, 6b); phase 7 open. See "Outcome" at the end of this file.
+Status: done (phases 0-6, 6b); phase 7 planned (items 7.1-7.7), not started. See "Outcome" at the end of this file.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -153,10 +153,78 @@ Must pass: Sub0Math `cmake --preset default`, build, `ctest --preset default`, `
 `local_ci.py --level quick`. Sub0Perf: python tests, build, `ctest`, selftest. Sub0Physics still configures against the new
 Sub0Math (`CPM_Sub0Math_SOURCE=D:/Craig/GitHub/Sub0Math`), with no pin change needed.
 
-### Phase 7: later, separate changes (not part of this plan's execution)
+### Phase 7: fixes and follow-ups in Sub0Perf (planned 2026-11-24 from the open issues)
 
-- Rename to `sub0perf_*` functions and `SUB0PERF_*` variables, reading the old names as fallbacks for one release. Same for `sub0perf_tooling_dir.txt`.
-- Parallel benchmark rows (issue 8; the goal is shorter gate and compare runs, and correctness comes first). Contract:
+Work in Sub0Perf unless a step names another repository. One PR per numbered item, in this order. Each item is a behaviour
+change, so it carries a test and a `selftest` case where the selftest covers that area, and its commit names the consumers it
+affects. Items 7.1-7.3 need no design and can start now. 7.4 waits for 7.1-7.3, so fixes aren't rebased across the rename.
+7.6 waits for its ADR.
+
+Issue coverage (every open issue reported against the tooling, as of 2026-11-24):
+
+| Issue | What is still wrong in the code (Sub0Perf main `10466f8`) | Item |
+|---|---|---|
+| Sub0Perf 5: linked worktrees | `SUB0MATH_PERF_GIT_HOOKS=AUTO` (PR 10) stops a *CMake* configure in a linked worktree from installing. Still open: `hooks.is_tracked_dir` treats an absolute `core.hooksPath` into the main checkout as untracked, so an explicit `install-hooks` or `ON` from a linked worktree still overwrites committed hooks. Every build directory shares `.git/sub0perf/config.json`, so a second build directory in the main checkout (local_ci's `build-local-*`) repoints the gate, which later fails with "building failed". A hook-time configure with `GIT_DIR` set can write `core.bare=true` and an absolute `core.hooksPath` into the shared git config. Tests that make temporary repositories inherit the hook's `GIT_DIR`. | 7.1 |
+| Sub0Perf 6: compare silent and slow; a gate row stalled for 70 min | No progress output, no overall budget, no per-process wall-clock cap, and a benchmark's one-shot setup is redone in every process round. | 7.2 |
+| Sub0Perf 2: docs-only push of a new branch | `gitstate.documentation_only` returns False for a zero remote sha. | 7.3 |
+| (plan D2) rename | The `sub0math_*` / `SUB0MATH_*` names remain. | 7.4 |
+| Sub0Perf 4, first box: processes from Sub0Platform | `platform_proc.py` is still a local copy. | 7.5 |
+| Sub0Perf 3 (umbrella), 7 (machine lease), 8 (parallel rows), 4 second box (topology); Sub0Platform 2 | Design not settled; only per-repository `PerfLock` exists. | 7.6 |
+| Sub0Canvas 7, item 1: a heap-byte metric differs under clang | A metrics spec has one expectation per metric, with no per-toolchain form. | 7.7 |
+
+**7.1 Linked worktrees and extra build directories (issue 5).**
+- `is_tracked_dir`: a hooks directory is tracked when it lies inside *any* worktree of the repository (the main worktree is
+  the parent of `git rev-parse --path-format=absolute --git-common-dir`; or use `git worktree list --porcelain`) and outside the common dir.
+- From a linked worktree, `install-hooks` (any mode) and any configure-time install refuse with one line: install from the
+  main checkout. They never write the common-dir git config or `.git/sub0perf/config.json`.
+- The config records the build directory that wrote it. A configure from another build directory in the same checkout
+  leaves the config alone while the recorded build directory still exists, and prints one line saying which one the gate uses.
+  `ON` still takes it over on purpose.
+- The gate refuses in one line, naming the fix ("reconfigure <build dir>"), when the configured executable or build directory is
+  missing or lies outside the current worktree. Today it reports "building failed" or measures another worktree's binary.
+- `tests/helpers.py` unsets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` for every temporary repository (the fix Sub0Canvas made locally).
+- Tests: a temporary repository with a linked worktree covers each case above. Comment on issue 5 and close it.
+
+**7.2 Bounded, visible runs (issue 6).**
+- `compare`, `gate` and `auto` print one progress line per round on stderr in every output format, giving round n/N, rows and ETA.
+  stdout stays the output contract.
+- `compare --budget SECONDS` (default 300). Without `--filter`, when the planned run (from the probe costs) exceeds it, refuse with the
+  estimate and the `--filter` / `--budget` to use.
+- A hard wall-clock cap per benchmark process (`platform_proc.launch(timeout=...)`): at the quick level, a tenth of the budget
+  or 3x the row's recorded cost, whichever is larger. A row that hits it is killed and gets verdict `TIMEOUT`. `TIMEOUT` is listed
+  in the outcome JSON `changed[]`, never blocks, and gives the row's command as `next_action`.
+- `BenchRunner` gains a per-process one-shot setup (for example `runner.setup("corpus 1e5", fn)`), built once per process and not
+  timed, so a large corpus is no longer rebuilt every round. This is an API addition in `bench_runner.hpp`; existing rows are unchanged.
+- Also guard against a row whose timed body is empty (about 1 ns, iteration scaling never converges; the 70-minute stall). nanobench's
+  epoch iterations get an upper bound, and such a row reports `TIMEOUT` instead of stalling.
+
+**7.3 Docs-only new branch (issue 2).** For a zero remote sha, diff against the merge-base with the branch's upstream,
+else the remote's default branch (`refs/remotes/<remote>/HEAD`). If neither resolves, keep measuring. Add the selftest
+"docs-only range" case and a unit test with a temporary repository.
+
+**7.4 Rename (D2's deferred half).** Add `sub0perf_*` functions and `SUB0PERF_*` cache and environment variables. Read the old
+names as fallbacks for one release, with a `DEPRECATION` message for the CMake functions only, so environment variables stay
+quiet. Write both `sub0perf_tooling_dir.txt` and `sub0math_tooling_dir.txt` for that release. Update `.github` `ci_power.py`,
+`hook_check.py`, `templates/pre-push` and `docs/ci-strategy.md` to accept either name. Then move each consumer (Sub0Math,
+Squad, Fabric, Canvas, Physics) in its own PR, then drop the fallbacks.
+
+**7.5 Processes from Sub0Platform (issue 4, first box).** Replace `platform_proc.py` with the Python `sub0platform` package's
+`proc` (`spawnDetached`, `alive`, `terminate`, `cpuSeconds`). Keep `launch(timeout)` from 7.2: add it to Sub0Platform first
+if `proc` lacks it. **(owner decision)** How the tooling finds the package. Recommendation: Sub0Perf fetches Sub0Platform with CPM
+`DOWNLOAD_ONLY` at a pinned SHA, and the tooling record gains its `python/` path, which `bench_check.py` puts on `sys.path`. That
+keeps the tooling standard-library only, with nothing pip-installed. Also move the power and clock readings (`power.py`, `speed.py`) to
+Sub0Platform's planned Python `host` module, and drop the duplicate `.github` `tools/ci/ci_power.py` once it can import that.
+
+**7.6 Machine-wide scheduling (issue 3, then 7, 8 and topology).**
+1. Write the interface from issue 3 as an ADR in `.github` **(owner)**. Job classes (`shared`, `parallel-eligible`, `exclusive`,
+   `hold-system`) are data, and resources are cores, memory bandwidth, GPU and power state. A blocked job reports who holds what
+   (a `blocked` object in `sub0perf-outcome-1`). Default is fail-fast for the gate, with `--wait`. Correctness runs never need a lease.
+   It must reconcile with Sub0LlmEngine's `supervision/machine_lease` record (`pid`, `time`, `what`, `tool`) and Sub0Platform issue 2, so there is one lock.
+2. Sub0Platform issue 2: C++ state directory, shared lock mode, and the `lease` module in Python and C++.
+3. Issue 7: `gate`, `auto` and workload runs take the lease (`exclusive`), with `PerfLock` kept inside it. Prototype the `blocked`
+   report first: it helps today's single lock.
+4. Issue 4, second box: Sub0Platform `topology` (performance and efficiency cores, SMT siblings).
+5. Issue 8: parallel rows as the `parallel-eligible` class, under this contract:
   1. **Correctness before timing.** A row's deterministic metrics and smoke run (`--smoke`, `BenchRunner::metric`) pass before any of
      its timings are taken, serial or parallel. A row that fails them is reported and never timed.
   2. **Declared eligibility, default serial.** The author opts a row in: `BenchRunner` gets a per-row flag (for example
@@ -171,8 +239,25 @@ Sub0Math (`CPM_Sub0Math_SOURCE=D:/Craig/GitHub/Sub0Math`), with no pin change ne
      the rest serially. On first use, and on a sample afterwards, cross-check against a serial run; a mismatch turns parallel mode off
      and reports it. The whole run holds the machine lease (issue 7), because parallel rows make the machine even less shareable.
   5. Baselines remain serial measurements; parallel runs are judged against them only through the calibrated shift, never recorded as baselines.
-- Fix Sub0Perf issues 5 and 6, then 4 and 7 against Sub0Platform (`platform_proc.py`, the machine lease). Move the power and clock readings to
-  Sub0Platform's Python `host` module.
+   Item 1 (correctness before timing) needs nothing from steps 1-4. It may ship first, on its own, as a quick win that also saves time.
+6. Consumers adopt the lease: Sub0Squad issue 8 (its host guard), Sub0LlmEngine (fit, bench, serve), Sub0Canvas timing.
+
+**7.7 Toolchain-dependent metrics (Sub0Canvas issue 7, item 1).** First find out whether the clang difference in
+`live heap bytes` is real: a different standard library allocates differently, so the metric is genuinely per toolchain.
+If it is, let a metric entry carry per-toolchain values (for example `"by_toolchain": {"clang": {"limit": ...}}`, matched on the
+compiler id the executable reports). `metrics accept` then edits only the running toolchain's value. If it is a bug, fix it in Sub0Canvas
+and change nothing here.
+
+Reported with the migration but not Sub0Perf's to fix (listed so nothing is lost):
+
+| Issue | Home |
+|---|---|
+| Sub0Math 3, Sub0Physics 4 item 2: macOS runner unsupported | `.github` `cpp-full.yml`: a runner input or a supported label, then re-run both full tiers |
+| Sub0Fabric 4 item 2, Sub0Canvas 7 item 2: Windows clang `-Werror` on `strerror` in Sub0Platform's `file.cpp` blocks `local-ci/full` | Sub0Platform (use `strerror_s` on Windows), or mark the step optional in each `.ci/local.json` |
+| Sub0Fabric 4 items 1, 3, 4; Sub0Canvas 7 item 3: missing `ci:*` labels; no scheduled full runs; red full history | `.github` ci-strategy: `hook_check.py` (or a new check) verifies that the labels the policy reads exist and that the weekly full run is enabled |
+| Sub0Physics 4 item 1: MSVC C3615 in `AxialSpringDamper::create` | Sub0Physics |
+| Sub0Canvas 7 items 1 (`test_consumer_*`) and 4 | Sub0Canvas |
+| Sub0LlmEngine 7: `tests` red on main | Sub0LlmEngine |
 
 ## Rules for the executor
 
@@ -189,5 +274,6 @@ the unused `tests/vendor/nanobench.h` are gone; Sub0Perf no longer carries a cop
 Issues: Sub0Math 4-8 moved to Sub0Perf as 4-8; Sub0Perf 2 (docs-only push of a new branch) and 3 (machine-wide scheduling, the umbrella for
 4, 7 and 8); CI-adoption gaps in Sub0Physics 4, Sub0Fabric 4 and Sub0Canvas 7 (Canvas PR 6 merged with `ci/policy` red, by the owner's decision).
 
-Left: item 6 above (move the per-consumer gate policy block into `Sub0Perf.cmake`, with Sub0Perf issue 5) and phase 7 (rename, parallel rows,
-Platform mechanism); the wasm gate and provenance tools stay in Sub0Math (D7).
+Item 6 is done too: `SUB0MATH_PERF_GIT_HOOKS=AUTO` (Sub0Perf PR 10, main `10466f8`), with the Sub0Fabric (PR 5) and Sub0Canvas (PR 8)
+blocks removed. Left: phase 7 (items 7.1-7.7, mapped to every open issue in its coverage table). The wasm gate and provenance tools stay
+in Sub0Math (D7).
