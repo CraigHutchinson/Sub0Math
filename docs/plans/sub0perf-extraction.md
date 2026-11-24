@@ -172,7 +172,7 @@ Issue coverage (every open issue reported against the tooling, as of 2026-11-24)
 | Sub0Perf 3 (umbrella), 7 (machine lease), 8 (parallel rows), 4 second box (topology); Sub0Platform 2 | Design not settled; only per-repository `PerfLock` exists. | 7.6 |
 | Sub0Canvas 7, item 1: a heap-byte metric differs under clang | A metrics spec has one expectation per metric, with no per-toolchain form. | 7.7 |
 
-**7.1 Linked worktrees and extra build directories (issue 5).**
+**7.1 Linked worktrees and extra build directories (issue 5).** [done: Sub0Perf PR 11]
 - `is_tracked_dir`: a hooks directory is tracked when it lies inside *any* worktree of the repository (the main worktree is
   the parent of `git rev-parse --path-format=absolute --git-common-dir`; or use `git worktree list --porcelain`) and outside the common dir.
 - From a linked worktree, `install-hooks` (any mode) and any configure-time install refuse with one line: install from the
@@ -185,7 +185,7 @@ Issue coverage (every open issue reported against the tooling, as of 2026-11-24)
 - `tests/helpers.py` unsets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` for every temporary repository (the fix Sub0Canvas made locally).
 - Tests: a temporary repository with a linked worktree covers each case above. Comment on issue 5 and close it.
 
-**7.2 Bounded, visible runs (issue 6).**
+**7.2 Bounded, visible runs (issue 6).** [done: Sub0Perf PR 12; the empty-body stall is bounded by the wall-clock cap, not a nanobench limit]
 - `compare`, `gate` and `auto` print one progress line per round on stderr in every output format, giving round n/N, rows and ETA.
   stdout stays the output contract.
 - `compare --budget SECONDS` (default 300). Without `--filter`, when the planned run (from the probe costs) exceeds it, refuse with the
@@ -198,11 +198,11 @@ Issue coverage (every open issue reported against the tooling, as of 2026-11-24)
 - Also guard against a row whose timed body is empty (about 1 ns, iteration scaling never converges; the 70-minute stall). nanobench's
   epoch iterations get an upper bound, and such a row reports `TIMEOUT` instead of stalling.
 
-**7.3 Docs-only new branch (issue 2).** For a zero remote sha, diff against the merge-base with the branch's upstream,
+**7.3 Docs-only new branch (issue 2).** [done: Sub0Perf PR 13] For a zero remote sha, diff against the merge-base with the branch's upstream,
 else the remote's default branch (`refs/remotes/<remote>/HEAD`). If neither resolves, keep measuring. Add the selftest
 "docs-only range" case and a unit test with a temporary repository.
 
-**7.4 Rename (D2's deferred half).** Add `sub0perf_*` functions and `SUB0PERF_*` cache and environment variables. Read the old
+**7.4 Rename (D2's deferred half).** [done except dropping the fallbacks: Sub0Perf PR 14, .github PR 3, consumers Sub0Math 13, Squad 10, Fabric 6, Canvas 9, Physics 5; the fallbacks (envnames.py, old CMake names, old record) go one release later] Add `sub0perf_*` functions and `SUB0PERF_*` cache and environment variables. Read the old
 names as fallbacks for one release, with a `DEPRECATION` message for the CMake functions only, so environment variables stay
 quiet. Write both `sub0perf_tooling_dir.txt` and `sub0math_tooling_dir.txt` for that release. Update `.github` `ci_power.py`,
 `hook_check.py`, `templates/pre-push` and `docs/ci-strategy.md` to accept either name. Then move each consumer (Sub0Math,
