@@ -166,7 +166,10 @@ Left, in order
    Sub0Math reads `build/sub0math_tooling_dir.txt` in a `python -c` one-liner instead.
 3. Phase 6: transfer Sub0Math issues 4, 5, 6, 7 and 8 to Sub0Perf (`gh issue transfer`, **owner**), each with a comment linking ADR 0004;
    comment on Sub0Platform issue 2 and the family responsibilities review; once every consumer has moved, remove the shim (own PR).
-4. Phase 7 stays out of scope: rename, and issue 8's contract (above).
+4. Sub0Perf issue 2 (gate: a docs-only push of a *new* branch should skip measuring; the owner asked for it on 2026-11-24). Existing
+   behaviour: `documentation_only` skips docs-only ranges but treats a new branch (zero remote sha) as unknown and measures. A behaviour
+   change, so after the move (D2). Until then a docs-only first push of a branch needs `SUB0MATH_PERF_SKIP=<reason>` on a noisy machine.
+5. Phase 7 stays out of scope: rename, and issue 8's contract (above).
 
 Notes for the next session
 - The Sub0Perf selftest needs the pre-push hook and a baseline: Sub0Perf's configure installs the hook (off on CI) and
