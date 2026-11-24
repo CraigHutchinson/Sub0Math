@@ -39,5 +39,5 @@ jobs:
     with:
       apt-packages: g++-14 ninja-build ccache
       cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/get_cpm.cmake cmake/Sub0MathFp.cmake
-      extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
+      extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF
     permissions: { contents: read, statuses: write, actions: read, pull-requests: read, checks: read }

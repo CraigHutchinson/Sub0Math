@@ -2,7 +2,7 @@
   "version": 1,
   "description": "Sub0Math local checks (docs/ci-strategy.md); run: python <.github repo>/tools/ci/local_ci.py --level quick|full",
   "selftest": [
-    "{python} -c \"import pathlib, subprocess, sys; d = pathlib.Path('build/sub0math_tooling_dir.txt').read_text().strip(); sys.exit(subprocess.call([sys.executable, d + '/bench_check.py', 'selftest', '--repo', '.']))\""
+    "{python} -c \"import pathlib, subprocess, sys; d = pathlib.Path('build/sub0perf_tooling_dir.txt').read_text().strip(); sys.exit(subprocess.call([sys.executable, d + '/bench_check.py', 'selftest', '--repo', '.']))\""
   ],
   "levels": {
     "quick": {
@@ -11,7 +11,7 @@
           "name": "gcc",
           "compiler": "gcc",
           "commands": [
-            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF",
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF",
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset quick --test-dir {builddir}"
           ]
@@ -21,7 +21,7 @@
           "compiler": "clang",
           "optional": true,
           "commands": [
-            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset quick --test-dir {builddir}"
           ]
@@ -54,7 +54,7 @@
           "name": "gcc",
           "compiler": "gcc",
           "commands": [
-            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF",
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF",
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset full --test-dir {builddir}"
           ]
@@ -64,7 +64,7 @@
           "compiler": "clang",
           "optional": true,
           "commands": [
-            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
+            "cmake --preset default -B {builddir} -G Ninja -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset full --test-dir {builddir}"
           ]

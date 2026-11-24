@@ -80,7 +80,7 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "SUB0MATH_BUILD_TESTING": "ON",
                 "SUB0MATH_BUILD_BENCHMARKS": "ON",
-                "SUB0MATH_PROFILE_FLAGS": "ON"
+                "SUB0PERF_PROFILE_FLAGS": "ON"
             }
         },
         {
@@ -91,7 +91,7 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "SUB0MATH_BUILD_TESTING": "ON",
                 "SUB0MATH_BUILD_BENCHMARKS": "ON",
-                "SUB0MATH_VECTORIZATION_REPORT": "ON"
+                "SUB0PERF_VECTORIZATION_REPORT": "ON"
             }
         }
     ],

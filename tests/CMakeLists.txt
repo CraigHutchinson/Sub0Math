@@ -59,7 +59,7 @@ target_compile_options(Sub0Math_HeaderCheck PRIVATE ${SUB0MATH_STRICT_WARNINGS})
 # ── Benchmarks (not run by ctest — run manually) ──────────────────────────────
 
 if(SUB0MATH_BUILD_BENCHMARKS)
-    sub0math_add_benchmark(Sub0Math_Bench bench_math.cpp METRICS perf/metrics.json SMOKE_TEST)
+    sub0perf_add_benchmark(Sub0Math_Bench bench_math.cpp METRICS perf/metrics.json SMOKE_TEST)
     target_link_libraries(Sub0Math_Bench PRIVATE Sub0Math::Sub0Math)
     sub0math_target_deterministic_fp(Sub0Math_Bench)
 endif()

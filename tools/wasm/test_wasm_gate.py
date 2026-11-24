@@ -77,8 +77,8 @@ class PerfConfigGuardTest(unittest.TestCase):
 class ConfigureTest(unittest.TestCase):
     def test_turns_the_perf_tooling_off_and_keeps_contraction_alone(self):
         arguments = wasm_gate.configure_arguments(Path("r"), "build-wasm", "SUB0PHYSICS")
-        self.assertIn("-DSUB0MATH_PERF_GIT_HOOKS=OFF", arguments)
-        self.assertIn("-DSUB0MATH_PERF_ON_BUILD=OFF", arguments)
+        self.assertIn("-DSUB0PERF_GIT_HOOKS=OFF", arguments)
+        self.assertIn("-DSUB0PERF_ON_BUILD=OFF", arguments)
         self.assertIn("-DSUB0PHYSICS_BUILD_BENCHMARKS=OFF", arguments)
         self.assertFalse([a for a in arguments if "contract" in a or "O3" in a or "Ofast" in a])
 
