@@ -23,7 +23,8 @@ both. Every tooling fix moves Sub0Math's history and every consumer's Sub0Math p
 | D5 | **Transition shim.** Sub0Math keeps a `cmake/Sub0MathTooling.cmake` for one release. It prints a `DEPRECATION` message, does `CPMAddPackage(NAME Sub0Perf ...)` at a pinned SHA if `Sub0Perf_SOURCE_DIR` is not already set, and includes `${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake`. Consumers pinned to older Sub0Math SHAs are unaffected until they bump. Remove the shim once every consumer has moved. |
 | D6 | Sub0Math's own benchmarks and gate consume Sub0Perf through CPM at an exact SHA, **only when Sub0Math is the top-level project** (`NOT IS_SUBPROJECT`). A consumer of the maths never fetches Sub0Perf because of Sub0Math. |
 | D7 | Out of scope (they stay in Sub0Math for now): `tools/wasm/wasm_gate.py` and `tools/provenance/`. Sub0Physics uses both from Sub0Math. They are family CI tooling and could later move to `.github` `tools/ci`. Record this as an open item in the ADR, nothing more. |
-| D8 | Open issues follow the code: Sub0Math issues 4, 5, 6 and 7 transfer to Sub0Perf (`gh issue transfer`) **(owner)**. Issue 3 (macOS runner) stays in Sub0Math. |
+| D8 | Open issues follow the code: Sub0Math issues 4, 5, 6, 7 and 8 transfer to Sub0Perf (`gh issue transfer`) **(owner)**. Issue 3 (macOS runner) stays in Sub0Math. |
+| D9 | Issue 8 (parallel benchmark rows) is **designed and built in Sub0Perf after the move**, never during it (D2). Its contract is set now (phase 7 below) so that the extraction does not close it off: rows stay serial unless a row is both **declared** parallel-eligible by its author and **measured** safe on this host. |
 
 ## Inventory: what moves
 
@@ -46,8 +47,8 @@ Each phase ends green before the next starts. Run commands in Git Bash unless th
 ### Phase 0: ADR **(owner)**
 
 Write `docs/decisions/0004-sub0perf.md` in the `.github` repository (local clone `D:\Craig\GitHub\CraigHutchinson.github`),
-in the format of 0002: Status *Proposed*, Owner, *Supersedes ADR 0001 decision 5*, Context (the Why above), Decision (D1-D8),
-Follow-ups (phase 7, issues 4 and 7 against Sub0Platform, D7). Add the row to `docs/decisions/README.md`. The owner
+in the format of 0002: Status *Proposed*, Owner, *Supersedes ADR 0001 decision 5*, Context (the Why above), Decision (D1-D9),
+Follow-ups (phase 7, issues 4 and 7 against Sub0Platform, issue 8, D7). Add the row to `docs/decisions/README.md`. The owner
 accepts it before phase 3 pushes anything.
 
 ### Phase 1: create Sub0Perf with history
@@ -111,13 +112,28 @@ the same baseline (the baseline files and `.git/sub0perf/` are untouched). **(ow
 
 ### Phase 6: tidy up
 
-- **(owner)** Transfer Sub0Math issues 4, 5, 6 and 7 to Sub0Perf, each with a comment linking the ADR.
+- **(owner)** Transfer Sub0Math issues 4, 5, 6, 7 and 8 to Sub0Perf, each with a comment linking the ADR.
 - Comment on Sub0Platform issue 2 and Sub0LlmEngine's review (section 8 table) that sub0perf now lives in Sub0Perf.
 - Once every consumer has moved: remove the shim from Sub0Math (its own small PR).
 
 ### Phase 7: later, separate changes (not part of this plan's execution)
 
 - Rename to `sub0perf_*` functions and `SUB0PERF_*` variables, reading the old names as fallbacks for one release. Same for `sub0perf_tooling_dir.txt`.
+- Parallel benchmark rows (issue 8; the goal is shorter gate and compare runs, and correctness comes first). Contract:
+  1. **Correctness before timing.** A row's deterministic metrics and smoke run (`--smoke`, `BenchRunner::metric`) pass before any of
+     its timings are taken, serial or parallel. A row that fails them is reported and never timed.
+  2. **Declared eligibility, default serial.** The author opts a row in: `BenchRunner` gets a per-row flag (for example
+     `.parallel(maxWidth)`), and `sub0math_add_benchmark` gets `PARALLEL <k>` as a per-executable ceiling (0 = never). Rows that
+     use threads, large shared state, the GPU, files or the network stay serial by not opting in. Nothing becomes parallel by default.
+  3. **Measured safety per host.** Topology probe (performance and efficiency cores, SMT siblings never paired; Sub0Platform `topology`
+     once it lands, issue 4), then interference calibration per eligible row: alone versus with k-1 copies pinned to other cores. The
+     safe width is the largest k whose median shift stays under a third of the gate tolerance and whose spread does not widen. Verdicts go
+     in a host profile beside `perf/baselines/<host>.json`, keyed by host, power state and toolchain. A key mismatch means serial
+     until re-calibrated.
+  4. **Scheduling and guardrail.** `gate`, `auto` and `compare` run safe rows concurrently, each process pinned to its own cores, and
+     the rest serially. On first use, and on a sample afterwards, cross-check against a serial run; a mismatch turns parallel mode off
+     and reports it. The whole run holds the machine lease (issue 7), because parallel rows make the machine even less shareable.
+  5. Baselines remain serial measurements; parallel runs are judged against them only through the calibrated shift, never recorded as baselines.
 - Fix Sub0Perf issues 5 and 6, then 4 and 7 against Sub0Platform (`platform_proc.py`, the machine lease). Move the power and clock readings to
   Sub0Platform's Python `host` module.
 
