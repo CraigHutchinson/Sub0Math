@@ -33,7 +33,7 @@ jobs:
   full:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
+    uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@d100f1b74b8906ec2fce6ded7ad3318cea3823d0
     with:
       cpm-cache-key-files: CMakeLists.txt tests/CMakeLists.txt cmake/get_cpm.cmake cmake/Sub0MathFp.cmake
       extra-cmake-args: -DSUB0MATH_WARNINGS_AS_ERRORS=ON -DSUB0MATH_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF

@@ -1,8 +1,6 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status (2026-11-25, late): phases 0-6 and 6b done. Phase 7: 7.1-7.5 done, and Sub0Perf is released as `v0.2.0` and `v0.3.0` with every
-consumer pinned to `v0.3.0`. "Next iteration" N1-N4 are done; N5 (ADR 0005) is drafted and awaits the owner. The open questions and their
-recommended answers are in "Open questions resolved" near the end of this file, and the work they lead to is "Iteration 3".
+Status (2026-11-25): **Done.** ADR 0005 was accepted in .github PR 4. The extraction is complete, and the remaining work continues in [Sub0Perf's scheduling plan](https://github.com/CraigHutchinson/Sub0Perf/blob/main/docs/PLAN.md). The sections below record the extraction history.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
