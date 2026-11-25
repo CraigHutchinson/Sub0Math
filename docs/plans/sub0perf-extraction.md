@@ -1,7 +1,8 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status (2026-11-25): phases 0-6 and 6b done. Phase 7: 7.1-7.4 done (7.4's fallbacks still to drop), 7.5 in progress, 7.6 and 7.7 not
-started. The work still to do is consolidated in "Next iteration" near the end of this file; "Outcome" records what merged.
+Status (2026-11-25, late): phases 0-6 and 6b done. Phase 7: 7.1-7.5 done, and Sub0Perf is released as `v0.2.0` and `v0.3.0` with every
+consumer pinned to `v0.3.0`. "Next iteration" N1-N4 are done; N5 (ADR 0005) is drafted and awaits the owner. The open questions and their
+recommended answers are in "Open questions resolved" near the end of this file, and the work they lead to is "Iteration 3".
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -297,12 +298,90 @@ never time a row that fails them. Needs no lease or ADR, and saves time on every
 
 Not Sub0Perf's work, unchanged: the table under phase 7 ("Reported with the migration but not Sub0Perf's to fix").
 
+## Open questions resolved (recommendations, 2026-11-25)
+
+Each answer is a recommendation for the owner. Where the owner already decided (the family responsibilities review, section 6 and its
+2026-11-24 approval), the answer records that rather than reopening it.
+
+**ADR 0005's three questions**
+1. *Is the lease Sub0Platform's, or a per-consumer convention?* **Sub0Platform's**, as the `lease` module in Python and C++. This was
+   already decided: the review's D4 (approved) puts the lease on Platform's `FileLock`, and Sub0Platform issue 2 item 3 recommends lifting the
+   engine's implementation. A convention would let the Python and C++ owner records drift. The ADR should state it as decided.
+2. *Is `--wait` off by default?* **Wait by default, bounded, and never silent.** This reconciles issue 7 (keep `PerfLock`'s
+   announce-and-wait) with the draft (fail-fast):
+   - Interactive commands (`compare`, `auto`, the CMake targets, an engine `fit` or `bench`) announce the holder and wait up to the
+     existing 15 minutes, then fail naming it. `--no-wait` fails at once.
+   - The **pre-push gate** waits at most 120 s, then **defers** like the battery rule: the push proceeds, the range goes to
+     `.git/sub0perf/deferred.json`, and the next gate measures it. `SUB0PERF_POWER_STRICT`'s twin, `SUB0PERF_LEASE_STRICT=1`, refuses instead.
+     A busy machine then never blocks a push and never lets an unmeasured change through silently.
+   - A shared holder (a serving engine) takes the lease at once unless an exclusive holder has it. Then it waits like an interactive
+     command, so a timing run in progress is never interrupted.
+3. *Does serving hold the lease shared?* **Yes**, as the owner approved in the review (section 6, decision 2): serving holds it
+   shared, and timing takes it exclusive. Until Sub0Platform has the shared mode, serving holds nothing and timing tools refuse while the engine
+   answers (today's behaviour).
+
+**Fixes to ADR 0005 before it is accepted** (found reviewing the draft):
+- **Drop `hold-system`.** The draft's own table has the serving engine both as `hold-system` and as holding the lease shared. At
+  the lock, `exclusive` already excludes every other holder, shared ones included (the draft's own "never both"), so `hold-system` is
+  `exclusive` plus some resources. Keep two lease modes, `shared` and `exclusive`. Record GPU, memory bandwidth and cores as fields of the
+  owner record, so the blocked message can name them. Engine `fit`/`bench` take `exclusive`; `serve` takes `shared`.
+- **`parallel-eligible` is not a lease class.** A parallel benchmark set runs inside one `sub0perf` process that already holds the
+  lease exclusively, and pins its own rows to cores (issue 8's contract). That needs no cross-process slot accounting, and nobody
+  else's work runs beside it.
+- **Defer the resource grant/refuse registry** (decision 3 of the draft) until a second kind of shared holder needs it. Version 1
+  records resources for reporting only. The "unknown class degrades to exclusive" rule then has nothing to apply to; keep `class` as
+  `shared|exclusive` in the record.
+- Keep: one lock file per machine, `PerfLock` nested inside the lease, the `blocked` object in `sub0perf-outcome-1`, correctness runs taking
+  no lease, and the stale rule (holder's pid dead).
+
+**Other open questions**
+- **7.7, toolchain-dependent metrics.** Accept N3's deferral of per-toolchain values, but it has a near trigger: the Windows clang
+  `local_ci` step starts failing `Sub0Canvas_Bench_metrics` (12.2 MB against 1.53 MB) as soon as Sub0Platform's `strerror` warning is fixed.
+  So build the cheap guard now: `BenchRunner` reports its standard library (libstdc++, libc++ or MSVC STL), and a metrics spec records the one
+  it was accepted on. A run under another standard library reports `SKIP (other standard library)` with the values, never FAIL. Build
+  per-toolchain values only when a CI leg runs another standard library.
+- **D7: wasm gate and provenance tools.** Move both to `.github` `tools/ci` the next time either is touched. `wasm_gate.py` is already
+  generic (`--prefix`). `upstream_provenance.py` serves Sub0Math's det_math ports and Sub0Physics alike. The move also removes Sub0Physics'
+  sibling-checkout path (`../Sub0Math/tools/wasm`). Low priority; nothing is broken.
+- **Sub0Math's baseline re-record (Sub0Math PR 19) and the gate verdict before it.** The re-record was harmless: the old and new
+  baselines agree on calibration within 3% (4,827 against 4,682 ns) and on the first rows within 6%. So the old baseline was not stale; the
+  machine was disturbed during that push (concurrent gates). The real question is the gate: it blocked unchanged code on 2-4x "confirmed"
+  regressions while the controls moved 27%, beyond the tolerance. PERFORMANCE.md says that should be ENVIRONMENT (inconclusive, never
+  blocking). Reproduce it from the kept records, find why the control shift didn't turn the verdicts into ENVIRONMENT (one candidate: the old
+  baseline predates the `calibration_sustained_ns` and `power` fields), fix it, and add a regression test. No revert of the baseline is needed.
+- **N4's missing selftest case.** Add a `selftest` case for `SMOKE_FAILED` (a synthetic executable whose `--smoke` fails), per the rule
+  that each behaviour change gets one where the selftest covers the area.
+- **Where the next plan lives.** The remaining work is Sub0Perf's and Sub0Platform's, not Sub0Math's. After Iteration 3's first item,
+  close this plan (status "done; continued in Sub0Perf") and continue in Sub0Perf `docs/PLAN.md`, linked from issue 3.
+
+## Iteration 3 (from 2026-11-25)
+
+In order. One PR per item; the executor rules below apply. Items 3.2 and 3.3 need nothing else and can start at once.
+
+| # | Work | Repo | Needs |
+|---|---|---|---|
+| 3.1 | Revise ADR 0005 with the answers and fixes above (`.github` PR 4), then stop. **(owner)** accepts it | `.github` | owner |
+| 3.2 | Gate verdict under a moved environment: reproduce, fix, regression test. Add N4's `SMOKE_FAILED` selftest case | Sub0Perf | none |
+| 3.3 | Standard-library guard for metrics (`SKIP (other standard library)`) | Sub0Perf, then consumer pin bumps | none |
+| 3.4 | Move this plan's remaining work to Sub0Perf `docs/PLAN.md`; mark this file done | Sub0Math, Sub0Perf | 3.1 |
+| 3.5 | Sub0Platform issue 2: C++ state directory, shared `FileLock` mode, `lease` module (Python and C++), conformance vectors for the owner record | Sub0Platform | 3.1 accepted |
+| 3.6 | Issue 7: `gate`, `auto` and workload runs take the lease (`exclusive`), with the wait-then-defer rule and the `blocked` report; release `v0.4.0` and bump consumers | Sub0Perf | 3.5 |
+| 3.7 | Topology (issue 4, second box), then issue 8: parallel rows inside the exclusive holder | Sub0Platform, Sub0Perf | 3.6 |
+| 3.8 | Lease adoption: Sub0LlmEngine `fit`/`bench` (exclusive) and `serve` (shared); Sub0Squad issue 8 host guard; Sub0Canvas timing | each consumer | 3.6 |
+| 3.9 | Move `wasm_gate.py` and `upstream_provenance.py` to `.github` `tools/ci` | `.github`, Sub0Math, Sub0Physics | when touched |
+
 ## Rules for the executor
 
 - Public repositories never name private ones: run the `.github` `tools/ci/private_names.py` on Sub0Perf and on each PR. Use generic examples only.
 - Never commit to `main` directly; topic branch and PR per repository. Never push, create a repository or transfer an issue without the owner.
 - Don't change behaviour during the move (D2). If a test needs a behaviour change to pass, stop and report it.
 - Sub0Squad, Sub0Fabric and Sub0Canvas may have other sessions working in them: check `git status` and the current branch before editing, and use a worktree if they're busy.
+- Never switch branches in a checkout another repository's build reads (the sibling checkouts CPM overrides point at). Use a linked worktree. A
+  branch switch in Sub0Canvas broke Sub0Squad's gate build on 2026-11-25.
+- One pre-push gate at a time on the machine, until the lease (3.6) enforces it: concurrent gates produced false regressions twice on 2026-11-25.
+  Push repositories one after another, never in parallel.
+- Don't re-record a baseline to get a push through until the controls and calibration show the machine itself is normal. If the gate
+  blocks unchanged code, treat that as a gate defect first (see 3.2).
 
 ## Outcome (2026-11-24)
 
