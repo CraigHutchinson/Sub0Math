@@ -1,6 +1,7 @@
 # Plan: extract sub0perf into its own repository (Sub0Perf)
 
-Status: done (phases 0-6, 6b); phase 7 planned (items 7.1-7.7), not started. See "Outcome" at the end of this file.
+Status (2026-11-25): phases 0-6 and 6b done. Phase 7: 7.1-7.4 done (7.4's fallbacks still to drop), 7.5 in progress, 7.6 and 7.7 not
+started. The work still to do is consolidated in "Next iteration" near the end of this file; "Outcome" records what merged.
 Owner approval is needed where a step says **(owner)**: creating the GitHub repository, every push, issue transfers,
 and installing `git-filter-repo`.
 
@@ -208,7 +209,7 @@ quiet. Write both `sub0perf_tooling_dir.txt` and `sub0math_tooling_dir.txt` for 
 `hook_check.py`, `templates/pre-push` and `docs/ci-strategy.md` to accept either name. Then move each consumer (Sub0Math,
 Squad, Fabric, Canvas, Physics) in its own PR, then drop the fallbacks.
 
-**7.5 Processes from Sub0Platform (issue 4, first box).** Replace `platform_proc.py` with the Python `sub0platform` package's
+**7.5 Processes from Sub0Platform (issue 4, first box).** [done except the host module: Sub0Platform PR 3 (`proc.launch`, 0.2.0, tag `v0.2.0`), Sub0Perf PRs 15 (merge `e23371b`: CPM at the tag `v0.2.0`, no build-record scan, `CPM_Sub0Platform_SOURCE` is the local override); the power and clock readings wait for Platform's `host` module, tracked on Sub0Perf issue 4 and Sub0Platform issue 1] Replace `platform_proc.py` with the Python `sub0platform` package's
 `proc` (`spawnDetached`, `alive`, `terminate`, `cpuSeconds`). Keep `launch(timeout)` from 7.2: add it to Sub0Platform first
 if `proc` lacks it. **(owner decision)** How the tooling finds the package. Recommendation: Sub0Perf fetches Sub0Platform with CPM
 `DOWNLOAD_ONLY` at a pinned SHA, and the tooling record gains its `python/` path, which `bench_check.py` puts on `sys.path`. That
@@ -259,6 +260,43 @@ Reported with the migration but not Sub0Perf's to fix (listed so nothing is lost
 | Sub0Canvas 7 items 1 (`test_consumer_*`) and 4 | Sub0Canvas |
 | Sub0LlmEngine 7: `tests` red on main | Sub0LlmEngine |
 
+## Next iteration (consolidated 2026-11-25)
+
+Progress review: Sub0Perf issues 2, 5 and 6 are closed by 7.3, 7.1 and 7.2 (Sub0Perf PRs 11-13). The rename (7.4) is merged everywhere
+(Sub0Perf 14, `.github` 3, Sub0Math 13, Squad 10, Fabric 6, Canvas 9, Physics 5), and every consumer pins Sub0Perf `3518ede`.
+Still open: Sub0Perf 3, 4, 7 and 8. Work in this order; one PR per item, with the same rules as before.
+
+**N1. Finish 7.5 (processes from Sub0Platform), with three corrections to the work in progress.** [corrections done: Sub0Perf PR 15, `e23371b`, pinned at the tag `v0.2.0` as the owner chose; consumer pin bumps in progress]
+- **Pin Sub0Platform exactly.** The branch sets `SUB0PERF_PLATFORM_TAG` to `main`. Every other family dependency is pinned to an exact
+  commit (ADR 0001 decision 6; Sub0Physics' pin guard), and a gate that measures against a moving dependency can't be reproduced.
+  Pin `v0.2.0` (the first release with `proc.launch`), or its SHA. Fail at configure if a reused `Sub0Platform_SOURCE_DIR` lacks `proc.launch`:
+  Sub0Squad fetches its own Sub0Platform pin and it is reused, so check it rather than assume it.
+- **Find the package in exactly two places, then stop.** `platform_path.py` currently tries four places, the last a scan of
+  `build*/` directories newest first. That scan is the same guess issue 5 removed: it can pick another build directory's record.
+  Keep "already importable", `SUB0PERF_PLATFORM_DIR`, and the `platform_python` entry `install-hooks` writes to the sub0perf config. If none
+  resolves, fail in one line, naming the configure step to run.
+- **One fetch path.** Drop the `FetchContent` fallback. Sub0Perf requires CPM like every consumer: include a `get_cpm.cmake` when
+  `CPMAddPackage` is missing, as Sub0Math does.
+- Then: commit, PR, and merge on green. Bump Sub0Perf in the five consumers (one PR each). Close the first box of issue 4.
+- Move `power.py`/`speed.py` to Sub0Platform's Python `host` module **only once that module exists**. It is Sub0Platform issue 1's
+  work, not Sub0Perf's, so that part leaves 7.5: track it as a comment on issue 4 and on Sub0Platform issue 1.
+
+**N2. Releases, so that "one release later" means something.** Sub0Perf has no tags yet. After N1, tag `v0.2.0` (the rename and the
+Sub0Platform processes), note it in README, and move consumers to pin the tag's SHA. Then drop 7.4's fallbacks (`envnames.py`, the old
+CMake names, `sub0math_tooling_dir.txt`) in `v0.3.0`, with `.github` `ci_power.py`, `hook_check.py` and the template accepting only the
+new names in the same wave. Check that no consumer still uses an old name first (grep `SUB0MATH_PERF_\|sub0math_add_benchmark\|sub0math_tooling_dir`).
+
+**N3. 7.7: investigate the clang heap-byte metric (Sub0Canvas issue 7, item 1).** Read-only first. It can run alongside N1. Report
+whether the difference is the standard library's allocation (then build per-toolchain metric values) or a Canvas bug (then fix it in Canvas).
+
+**N4. 7.6 step 5 item 1: correctness before timing.** `gate`, `auto` and `compare` run the smoke and metrics checks first and
+never time a row that fails them. Needs no lease or ADR, and saves time on every push. Ship after N1.
+
+**N5. 7.6 steps 1-4: the scheduling ADR (owner).** Draft the ADR in `.github` from issue 3 and stop for the owner. Nothing in
+7.6 steps 2-6 or issue 8's parallel rows starts before it is accepted.
+
+Not Sub0Perf's work, unchanged: the table under phase 7 ("Reported with the migration but not Sub0Perf's to fix").
+
 ## Rules for the executor
 
 - Public repositories never name private ones: run the `.github` `tools/ci/private_names.py` on Sub0Perf and on each PR. Use generic examples only.
@@ -275,5 +313,6 @@ Issues: Sub0Math 4-8 moved to Sub0Perf as 4-8; Sub0Perf 2 (docs-only push of a n
 4, 7 and 8); CI-adoption gaps in Sub0Physics 4, Sub0Fabric 4 and Sub0Canvas 7 (Canvas PR 6 merged with `ci/policy` red, by the owner's decision).
 
 Item 6 is done too: `SUB0MATH_PERF_GIT_HOOKS=AUTO` (Sub0Perf PR 10, main `10466f8`), with the Sub0Fabric (PR 5) and Sub0Canvas (PR 8)
-blocks removed. Left: phase 7 (items 7.1-7.7, mapped to every open issue in its coverage table). The wasm gate and provenance tools stay
-in Sub0Math (D7).
+blocks removed. Phase 7 so far (2026-11-25): Sub0Perf PRs 11-14 (7.1-7.4; issues 2, 5 and 6 closed), `.github` PR 3, consumer rename PRs
+Sub0Math 13, Squad 10, Fabric 6, Canvas 9, Physics 5, and Sub0Platform PR 3 (`proc.launch`, 0.2.0). Left: "Next iteration" N1-N5. The wasm
+gate and provenance tools stay in Sub0Math (D7).
