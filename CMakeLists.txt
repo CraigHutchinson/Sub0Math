@@ -23,7 +23,7 @@ if(NOT IS_SUBPROJECT)
     # Pinned to the Sub0Perf merge of 2026-11-24 that renamed the tooling to sub0perf_* / SUB0PERF_* (the old names still work for one release).
     CPMAddPackage(NAME Sub0Perf
         GIT_REPOSITORY https://github.com/CraigHutchinson/Sub0Perf.git
-        GIT_TAG 3518ede774aacd0b42e8669bbddb222e2b9d319b
+        GIT_TAG 2dc88d4fbddc9f421bbe9189b12d72cdee7df7b7
         DOWNLOAD_ONLY YES)
     include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")
 endif()
