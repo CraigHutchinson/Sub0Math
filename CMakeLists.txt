@@ -20,10 +20,10 @@ include(cmake/Sub0MathFp.cmake)
 # top-level project: a consumer of the maths never fetches it.
 if(NOT IS_SUBPROJECT)
     include(cmake/get_cpm.cmake)
-    # Pinned to the Sub0Perf v0.3.0 tag (the tooling uses sub0perf_* / SUB0PERF_*; the old sub0math_* names were removed in it).
+    # Pinned to the Sub0Perf v0.4.0 tag commit (2026-11-25).
     CPMAddPackage(NAME Sub0Perf
         GIT_REPOSITORY https://github.com/CraigHutchinson/Sub0Perf.git
-        GIT_TAG 09ddbd42f509f45395718bead3e8305c95dc8ea9
+        GIT_TAG af5953411488674d8f9b85e9ce8687510203c0ac
         DOWNLOAD_ONLY YES)
     include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")
 endif()
