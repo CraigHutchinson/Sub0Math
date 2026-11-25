@@ -1,133 +1,329 @@
 {
   "format": 2,
-  "host": "CrogLegion",
+  "host": "croglegion",
   "machine": "AMD64",
   "system": "Windows 11",
   "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
-  "calibration_ns": 4827.202,
+  "power": {
+    "state": "ac",
+    "saver": false,
+    "scheme": "Balanced",
+    "mode": {
+      "ac": "Balanced",
+      "dc": "Balanced"
+    }
+  },
+  "calibration_ns": 4681.678,
+  "calibration_sustained_ns": 4745.15,
   "epochs": 0,
+  "cpu": 23,
   "benchmarks": {
     "Mat4 * Vec4, double": {
-      "median_ns": 1336.504,
-      "cv": 0.0202,
+      "median_ns": 1263.379,
+      "cv": 0.0165,
       "rounds": 5
     },
     "Mat4 * Vec4, float": {
-      "median_ns": 910.293,
-      "cv": 0.0107,
+      "median_ns": 893.774,
+      "cv": 0.0017,
+      "rounds": 5
+    },
+    "atan2 x1024, det::atan2": {
+      "median_ns": 5407.798,
+      "cv": 0.0357,
+      "rounds": 5,
+      "modes": [
+        5362.765,
+        5913.49
+      ]
+    },
+    "atan2 x1024, hand-written std::atan2": {
+      "median_ns": 6967.98,
+      "cv": 0.0316,
       "rounds": 5
     },
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
-      "median_ns": 1278.373,
-      "cv": 0.0356,
-      "rounds": 14
+      "median_ns": 1574.356,
+      "cv": 0.0124,
+      "rounds": 5
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
-      "median_ns": 979.144,
-      "cv": 0.0563,
-      "rounds": 14
+      "median_ns": 1139.343,
+      "cv": 0.0157,
+      "rounds": 5
     },
     "box vs 1024 blocks, hand-written 2D SAT": {
-      "median_ns": 969.918,
-      "cv": 0.0412,
-      "rounds": 14
+      "median_ns": 200.113,
+      "cv": 0.002,
+      "rounds": 5
+    },
+    "capsule-slab contact 64x4, contact(Capsule, ConvexPolygon)": {
+      "median_ns": 4537.0,
+      "cv": 0.0085,
+      "rounds": 5
+    },
+    "capsule-slab contact 64x4, hand-written twin": {
+      "median_ns": 4885.899,
+      "cv": 0.019,
+      "rounds": 5
     },
     "dot, double": {
-      "median_ns": 696.042,
-      "cv": 0.0131,
+      "median_ns": 497.782,
+      "cv": 0.0016,
       "rounds": 5
     },
     "dot, f32::Length": {
-      "median_ns": 681.543,
-      "cv": 0.0178,
+      "median_ns": 500.269,
+      "cv": 0.0297,
       "rounds": 5
     },
     "dot, f64::Length": {
-      "median_ns": 704.182,
-      "cv": 0.0082,
+      "median_ns": 497.205,
+      "cv": 0.0206,
       "rounds": 5
     },
     "dot, float": {
-      "median_ns": 683.618,
-      "cv": 0.0091,
-      "rounds": 5
-    },
-    "quaternion rotate, double": {
-      "median_ns": 2211.808,
+      "median_ns": 496.296,
       "cv": 0.0146,
       "rounds": 5
     },
-    "quaternion rotate, float": {
-      "median_ns": 1126.418,
+    "grid cellOf x1024, RegularGrid<f64::Length>::cellOf": {
+      "median_ns": 2195.943,
+      "cv": 0.0159,
+      "rounds": 5
+    },
+    "grid cellOf x1024, hand-written scalars": {
+      "median_ns": 2293.71,
+      "cv": 0.0219,
+      "rounds": 5,
+      "modes": [
+        2277.482,
+        2535.169
+      ]
+    },
+    "grid cellsTouching x1024, RegularGrid<f64::Length>::cellsTouching": {
+      "median_ns": 7305.714,
+      "cv": 0.0067,
+      "rounds": 5
+    },
+    "grid cellsTouching x1024, hand-written scalars": {
+      "median_ns": 7396.006,
       "cv": 0.0095,
       "rounds": 5
     },
+    "inertia to parent x1024, PluckerTransform::applyInverse": {
+      "median_ns": 23163.598,
+      "cv": 0.0101,
+      "rounds": 5,
+      "modes": [
+        23075.42,
+        27566.837
+      ]
+    },
+    "inertia to parent x1024, hand-written scalars": {
+      "median_ns": 13371.519,
+      "cv": 0.0307,
+      "rounds": 5
+    },
+    "quaternion rotate, double": {
+      "median_ns": 1879.777,
+      "cv": 0.0059,
+      "rounds": 5
+    },
+    "quaternion rotate, float": {
+      "median_ns": 2117.798,
+      "cv": 0.0165,
+      "rounds": 5
+    },
     "ray vs triangles, hand-written Moller-Trumbore": {
-      "median_ns": 3968.815,
-      "cv": 0.0318,
+      "median_ns": 3898.029,
+      "cv": 0.0058,
       "rounds": 5
     },
     "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
-      "median_ns": 3837.654,
-      "cv": 0.0147,
+      "median_ns": 3509.53,
+      "cv": 0.0053,
       "rounds": 5
     },
     "segment distance^2, closestPoint(Segment<f64::Length>)": {
-      "median_ns": 1943.729,
-      "cv": 0.0049,
+      "median_ns": 1808.57,
+      "cv": 0.015,
       "rounds": 5
     },
     "segment distance^2, hand-written scalars": {
-      "median_ns": 1945.955,
-      "cv": 0.0089,
+      "median_ns": 2102.983,
+      "cv": 0.0139,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=1000, det::sin/det::cos": {
+      "median_ns": 11726.871,
+      "cv": 0.0189,
+      "rounds": 5,
+      "modes": [
+        11600.063,
+        13231.959
+      ]
+    },
+    "sin+cos x1024 |x|<=1000, det::sincos": {
+      "median_ns": 9051.869,
+      "cv": 0.0102,
+      "rounds": 5,
+      "modes": [
+        9050.738,
+        10100.026
+      ]
+    },
+    "sin+cos x1024 |x|<=1000, hand-written std::sin/std::cos": {
+      "median_ns": 8245.518,
+      "cv": 0.0263,
+      "rounds": 5,
+      "modes": [
+        8183.519,
+        9484.328
+      ]
+    },
+    "sin+cos x1024 |x|<=1e6, det::sin/det::cos": {
+      "median_ns": 12693.072,
+      "cv": 0.0107,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=1e6, det::sincos": {
+      "median_ns": 9602.899,
+      "cv": 0.0132,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=1e6, hand-written std::sin/std::cos": {
+      "median_ns": 8117.17,
+      "cv": 0.0173,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=4, det::sin/det::cos": {
+      "median_ns": 8200.639,
+      "cv": 0.011,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=4, det::sincos": {
+      "median_ns": 6442.398,
+      "cv": 0.0589,
+      "rounds": 5
+    },
+    "sin+cos x1024 |x|<=4, hand-written std::sin/std::cos": {
+      "median_ns": 6546.041,
+      "cv": 0.03,
+      "rounds": 5
+    },
+    "spatial transform x1024, PluckerTransform apply/applyInverse": {
+      "median_ns": 6618.553,
+      "cv": 0.0161,
+      "rounds": 5
+    },
+    "spatial transform x1024, hand-written scalars": {
+      "median_ns": 6531.564,
+      "cv": 0.0188,
       "rounds": 5
     },
     "triangle closest point, closestPoint(Triangle<f64::Length>)": {
-      "median_ns": 4365.676,
-      "cv": 0.0108,
+      "median_ns": 3824.366,
+      "cv": 0.0085,
       "rounds": 5
     },
     "triangle closest point, hand-written scalars": {
-      "median_ns": 4370.763,
-      "cv": 0.0199,
+      "median_ns": 4507.842,
+      "cv": 0.0287,
       "rounds": 5
     },
     "x += v*dt, double": {
-      "median_ns": 372.641,
-      "cv": 0.0024,
+      "median_ns": 759.276,
+      "cv": 0.0058,
       "rounds": 5
     },
     "x += v*dt, f64::Length": {
-      "median_ns": 379.033,
-      "cv": 0.0137,
+      "median_ns": 757.036,
+      "cv": 0.0108,
       "rounds": 5
     },
     "x += v*dt, float": {
-      "median_ns": 175.967,
-      "cv": 0.0277,
-      "rounds": 5
+      "median_ns": 726.925,
+      "cv": 0.0135,
+      "rounds": 5,
+      "modes": [
+        721.441,
+        781.557
+      ]
     }
   },
   "pairs": {
+    "atan2 x1024, det::atan2": {
+      "reference": "atan2 x1024, hand-written std::atan2",
+      "ratio": 0.7739
+    },
     "box vs 1024 blocks, AabbOverlapTester(Aabb corners)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 1.3172
+      "ratio": 7.8868
     },
     "box vs 1024 blocks, AabbOverlapTester(centre, half)": {
       "reference": "box vs 1024 blocks, hand-written 2D SAT",
-      "ratio": 1.0181
+      "ratio": 5.716
+    },
+    "capsule-slab contact 64x4, contact(Capsule, ConvexPolygon)": {
+      "reference": "capsule-slab contact 64x4, hand-written twin",
+      "ratio": 0.9339
+    },
+    "grid cellOf x1024, RegularGrid<f64::Length>::cellOf": {
+      "reference": "grid cellOf x1024, hand-written scalars",
+      "ratio": 0.9538
+    },
+    "grid cellsTouching x1024, RegularGrid<f64::Length>::cellsTouching": {
+      "reference": "grid cellsTouching x1024, hand-written scalars",
+      "ratio": 0.9917
+    },
+    "inertia to parent x1024, PluckerTransform::applyInverse": {
+      "reference": "inertia to parent x1024, hand-written scalars",
+      "ratio": 1.7622,
+      "modes": [
+        1.7402,
+        1.9914
+      ]
     },
     "ray vs triangles, intersect(Ray<f64::Length>, Triangle)": {
       "reference": "ray vs triangles, hand-written Moller-Trumbore",
-      "ratio": 0.9693
+      "ratio": 0.9044
     },
     "segment distance^2, closestPoint(Segment<f64::Length>)": {
       "reference": "segment distance^2, hand-written scalars",
-      "ratio": 0.9998
+      "ratio": 0.8585
+    },
+    "sin+cos x1024 |x|<=1000, det::sin/det::cos": {
+      "reference": "sin+cos x1024 |x|<=1000, hand-written std::sin/std::cos",
+      "ratio": 1.4175
+    },
+    "sin+cos x1024 |x|<=1000, det::sincos": {
+      "reference": "sin+cos x1024 |x|<=1000, hand-written std::sin/std::cos",
+      "ratio": 1.0978
+    },
+    "sin+cos x1024 |x|<=1e6, det::sin/det::cos": {
+      "reference": "sin+cos x1024 |x|<=1e6, hand-written std::sin/std::cos",
+      "ratio": 1.5708
+    },
+    "sin+cos x1024 |x|<=1e6, det::sincos": {
+      "reference": "sin+cos x1024 |x|<=1e6, hand-written std::sin/std::cos",
+      "ratio": 1.1789
+    },
+    "sin+cos x1024 |x|<=4, det::sin/det::cos": {
+      "reference": "sin+cos x1024 |x|<=4, hand-written std::sin/std::cos",
+      "ratio": 1.2528
+    },
+    "sin+cos x1024 |x|<=4, det::sincos": {
+      "reference": "sin+cos x1024 |x|<=4, hand-written std::sin/std::cos",
+      "ratio": 0.9575
+    },
+    "spatial transform x1024, PluckerTransform apply/applyInverse": {
+      "reference": "spatial transform x1024, hand-written scalars",
+      "ratio": 1.004
     },
     "triangle closest point, closestPoint(Triangle<f64::Length>)": {
       "reference": "triangle closest point, hand-written scalars",
-      "ratio": 1.002
+      "ratio": 0.8481
     }
   },
   "accepted": [
@@ -196,6 +392,12 @@
           }
         }
       }
+    },
+    {
+      "date": "2026-11-25",
+      "commit": "f76a73480fa24983687d060b28e587c39a6c8353",
+      "reason": "Re-recorded on this host: the committed baseline predates the machine's current state (controls moved 27 percent; unchanged code measured 2-4x slower against it, while the previous commit's local record agrees to within 1 percent)",
+      "benchmarks": "all (re-recorded)"
     }
   ]
 }
