@@ -266,7 +266,7 @@ Progress review: Sub0Perf issues 2, 5 and 6 are closed by 7.3, 7.1 and 7.2 (Sub0
 (Sub0Perf 14, `.github` 3, Sub0Math 13, Squad 10, Fabric 6, Canvas 9, Physics 5), and every consumer pins Sub0Perf `3518ede`.
 Still open: Sub0Perf 3, 4, 7 and 8. Work in this order; one PR per item, with the same rules as before.
 
-**N1. Finish 7.5 (processes from Sub0Platform), with three corrections to the work in progress.** [corrections done: Sub0Perf PR 15, `e23371b`, pinned at the tag `v0.2.0` as the owner chose; consumer pin bumps in progress]
+**N1. Finish 7.5 (processes from Sub0Platform), with three corrections to the work in progress.** [corrections done: Sub0Perf PR 15, `e23371b`, pinned at the tag `v0.2.0` as the owner chose; consumer pin bumps done at Sub0Perf `2dc88d4` (PR 16: Sub0Perf fetches Sub0Platform as its own package `Sub0PerfPlatform`, because Squad, Fabric and Canvas add their own Sub0Platform with `SOURCE_SUBDIR cpp` and another pin): Sub0Math 16, Squad 11, Fabric 7, Canvas 10, Physics 6; comments on Sub0Perf issue 4 (first box ticked) and Sub0Platform issue 1 (host module, topology)]
 - **Pin Sub0Platform exactly.** The branch sets `SUB0PERF_PLATFORM_TAG` to `main`. Every other family dependency is pinned to an exact
   commit (ADR 0001 decision 6; Sub0Physics' pin guard), and a gate that measures against a moving dependency can't be reproduced.
   Pin `v0.2.0` (the first release with `proc.launch`), or its SHA. Fail at configure if a reused `Sub0Platform_SOURCE_DIR` lacks `proc.launch`:
@@ -281,18 +281,18 @@ Still open: Sub0Perf 3, 4, 7 and 8. Work in this order; one PR per item, with th
 - Move `power.py`/`speed.py` to Sub0Platform's Python `host` module **only once that module exists**. It is Sub0Platform issue 1's
   work, not Sub0Perf's, so that part leaves 7.5: track it as a comment on issue 4 and on Sub0Platform issue 1.
 
-**N2. Releases, so that "one release later" means something.** Sub0Perf has no tags yet. After N1, tag `v0.2.0` (the rename and the
+**N2. Releases, so that "one release later" means something.** [grep done: no consumer uses an old name except the two deliberate fallbacks (the `.githooks/pre-push` `sub0math_tooling_dir.txt` line in Fabric and Canvas, and Canvas's `hostAlias`/`SUB0MATH_PERF_HOST` in `tools/k0/env.mjs`); tag `v0.2.0` and `v0.3.0` wait for the owner's explicit yes, and the consumers now pin `2dc88d4`, which is before N4] Sub0Perf has no tags yet. After N1, tag `v0.2.0` (the rename and the
 Sub0Platform processes), note it in README, and move consumers to pin the tag's SHA. Then drop 7.4's fallbacks (`envnames.py`, the old
 CMake names, `sub0math_tooling_dir.txt`) in `v0.3.0`, with `.github` `ci_power.py`, `hook_check.py` and the template accepting only the
 new names in the same wave. Check that no consumer still uses an old name first (grep `SUB0MATH_PERF_\|sub0math_add_benchmark\|sub0math_tooling_dir`).
 
-**N3. 7.7: investigate the clang heap-byte metric (Sub0Canvas issue 7, item 1).** Read-only first. It can run alongside N1. Report
+**N3. 7.7: investigate [report, nothing built: the Linux clang leg of Canvas's full tier is green on `main` and matches gcc exactly (both use libstdc++; the committed ceilings equal gcc's values, for example `index cold 1e5: live heap bytes` 1,531,392). Only a Windows clang build differs (12.2 MB there, linked against the MSVC standard library; its other metrics did not finish in a local run). So the difference is the standard library's allocation, not a Canvas bug, but it appears only with a different standard library (MSVC STL, libc++), which no CI leg uses. Per-toolchain values (`by_toolchain`) are therefore not needed yet; build them when a CI leg uses another standard library. Decision for the owner.] the clang heap-byte metric (Sub0Canvas issue 7, item 1).** Read-only first. It can run alongside N1. Report
 whether the difference is the standard library's allocation (then build per-toolchain metric values) or a Canvas bug (then fix it in Canvas).
 
-**N4. 7.6 step 5 item 1: correctness before timing.** `gate`, `auto` and `compare` run the smoke and metrics checks first and
+**N4. 7.6 step 5 item 1: correctness before timing.** [done: Sub0Perf PR 17; `SMOKE_FAILED`, `counts.smoke_failed`; consumers get it at their next pin bump] `gate`, `auto` and `compare` run the smoke and metrics checks first and
 never time a row that fails them. Needs no lease or ADR, and saves time on every push. Ship after N1.
 
-**N5. 7.6 steps 1-4: the scheduling ADR (owner).** Draft the ADR in `.github` from issue 3 and stop for the owner. Nothing in
+**N5. 7.6 steps 1-4: the scheduling ADR (owner).** [drafted as ADR 0005, Proposed: `.github` PR 4, open for the owner to accept or change; nothing else started] Draft the ADR in `.github` from issue 3 and stop for the owner. Nothing in
 7.6 steps 2-6 or issue 8's parallel rows starts before it is accepted.
 
 Not Sub0Perf's work, unchanged: the table under phase 7 ("Reported with the migration but not Sub0Perf's to fix").
